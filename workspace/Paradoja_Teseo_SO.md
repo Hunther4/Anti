@@ -1,1 +1,0 @@
-# Análisis Profundo: La Nave de Teseo en Sistemas Operativos Autoactualizables

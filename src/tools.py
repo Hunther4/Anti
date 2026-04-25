@@ -1,3 +1,4 @@
+import asyncio
 import os
 import requests
 import re
@@ -205,12 +206,13 @@ def read_file(filename: str, workspace_path: str = "workspace") -> str:
         return f"Error al leer archivo: {e}"
 
 
-def autonomous_research(query: str, max_links: int = 5) -> str:
+async def autonomous_research(query: str, max_links: int = 5) -> str:
     """
-    Performs a search and automatically fetches the content of the top links.
+    Performs a search and automatically fetches the content of the top links in parallel.
     Returns a consolidated report with distilled digests.
     """
     print(f"--- Iniciando investigacion autonoma: {query} ---")
+    # Search is still sync for now as it's a single request
     search_results_raw = duckduckgo_search(query, max_results=max_links)
     
     if "No se encontraron resultados" in search_results_raw:
@@ -225,20 +227,24 @@ def autonomous_research(query: str, max_links: int = 5) -> str:
         search_results_raw,
         "\n--- ANALISIS DE FUENTES (DESTILADO) ---\n"
     ]
-    
-    for i, url in enumerate(urls[:max_links]):
+
+    async def _fetch_and_format(i, url):
         print(f"--- Extrayendo y destilando (Link {i+1}): {url} ---")
-        content = fetch_url_text(url)
+        # requests is blocking, run in thread
+        content = await asyncio.to_thread(fetch_url_text, url)
         
         # Simple distillation: take key sentences or segments
-        # In a real scenario, this could be a small model call, but here we do it procedurally
         snippet = content[:2500]
         # Remove common noise patterns
         snippet = re.sub(r'\s+', ' ', snippet).strip()
         
-        consolidated.append(f"\n[FUENTE {i+1}] {url}")
-        consolidated.append(f"EXTRACTO CLAVE: {snippet}...")
-        
+        return f"\n[FUENTE {i+1}] {url}\nEXTRACTO CLAVE: {snippet}..."
+
+    # Launch all fetches in parallel
+    tasks = [_fetch_and_format(i, url) for i, url in enumerate(urls[:max_links])]
+    source_reports = await asyncio.gather(*tasks)
+    
+    consolidated.extend(source_reports)
     consolidated.append("\n--- FIN DE INVESTIGACION ---\n")
     consolidated.append("INSTRUCCION: Usa estos datos para generar tu informe final. No uses placeholders.")
     

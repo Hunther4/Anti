@@ -29,6 +29,12 @@ Thumbs.db
 logs/
 *.log
 
-# Memoria del agente (opcional - podees subir si queres)
-# memory/engrams/
-# memory/logs.jsonl
+# Workspace y Temporales (Basura de pruebas)
+extras/scratch/
+lectura/
+
+# Memoria del agente (Datos locales y personales)
+memory/engrams/
+memory/logs.jsonl
+memory/usage_stats.json
+memory/patterns.md

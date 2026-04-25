@@ -94,7 +94,7 @@ class AntiAgent:
 
         # Autonomous Components
         url = self.config.get("lm_studio_url", "http://127.0.0.1:1234/v1")
-        self.scorer = PRMScorer(prm_url=url, prm_model="local-model")
+        self.scorer = PRMScorer(prm_url=url, prm_model=self.brain.model)
         self.evolver = SkillEvolver(base_url=url, model="local-model")
         self.consolidator = MemoryConsolidator(self.memory, self.evolver)
         self.last_maintenance_count = 0
@@ -171,8 +171,6 @@ class AntiAgent:
         elif cmd_lower == "consolidate":
             stats = await self.consolidator.run_maintenance()
             return f"Consolidación finalizada: {stats['deleted_decay']} purgados, {stats['consolidated_engrams']} sintetizados."
-        elif cmd_lower == "benchmark":
-            return await self._run_benchmark()
         else:
             return await self._process(cmd, image_data=image_data)
 
@@ -321,7 +319,7 @@ class AntiAgent:
                 if match:
                     url = match.group(1).strip()
                     print(f"{Colors.YELLOW}[*] [{tool_step+1}/5] FETCH: {url}...{Colors.END}")
-                    result = fetch_url_text(url)
+                    result = await asyncio.to_thread(fetch_url_text, url)
                     tool_triggered = True
                     current_step.update({"tool": "FETCH", "query": url, "result_summary": result[:200] + "..."})
                     if url not in extracted_sources.values():
@@ -333,7 +331,7 @@ class AntiAgent:
                 if match:
                     query = match.group(1).strip()
                     print(f"{Colors.YELLOW}[*] [{tool_step+1}/5] RESEARCH PROFUNDO: {query}...{Colors.END}")
-                    result = autonomous_research(query)
+                    result = await autonomous_research(query)
                     tool_triggered = True
                     current_step.update({"tool": "RESEARCH", "query": query, "result_summary": "Informe consolidado generado."})
                     
@@ -468,15 +466,6 @@ class AntiAgent:
             "usage": usage,
             "score": score
         }
-
-    async def _run_benchmark(self):
-        from src.benchmark import SentinelGauntlet
-        print(f"{Colors.YELLOW}[*] Iniciando protocolo SENTINEL GAUNTLET...{Colors.END}")
-        runner = SentinelGauntlet(self)
-        report_path = await runner.run()
-        msg = f"Benchmark finalizado con exito.\nReporte generado: {report_path}"
-        print(f"{Colors.GREEN}[+] {msg}{Colors.END}")
-        return msg
 
     # --- Reasoner ---
 
@@ -631,7 +620,6 @@ ANTI-AGENT — COMANDOS
   reflect     Analiza experiencias pasadas y genera reglas (evolución).
   memories    Muestra un resumen de la memoria del agente (logs, patrones, engrams).
   engra       Lista todos los engrams (conocimiento persistente) con resumen.
-  benchmark   Ejecuta el protocolo SENTINEL GAUNTLET v1.0.
   compact     Comprime la memoria de patrones.
   forget      Borra toda la memoria.
   status      Estado del sistema.
@@ -727,6 +715,9 @@ ESTADO DEL SISTEMA (Sentinel v1.3 Active)
         # Re-inicializar si cambió el context del modelo
         if self.context_mgr.model_context_length != model_context:
             self.context_mgr = ContextManager(model_context)
+        
+        # Sync scorer model
+        self.scorer.prm_model = self.brain.model
         
         # 2. Get load level
         usage_percent = self.context_mgr.usage_percent

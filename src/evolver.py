@@ -170,9 +170,8 @@ class SkillEvolver:
                     union = new_tokens | old_tokens
                     similarity = len(intersection) / len(union)
                     
-                    if similarity > 0.6: # Umbral de duplicidad
+                    if similarity > 0.5: # Umbral de duplicidad
                         return True, old_data.get("topic")
-            except: continue
         return False, None
 
     async def extract_engrams(self, logs: List[Dict]) -> List[Dict]:

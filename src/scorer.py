@@ -134,6 +134,7 @@ class PRMScorer:
                 "temperature": self.temperature,
                 "max_tokens": self.max_new_tokens,
             }
+            print(f"[DEBUG] Scorer Payload: {payload}")
             # Use run_in_executor to make requests.post non-blocking for the event loop
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
