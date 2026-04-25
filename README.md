@@ -1,104 +1,93 @@
 # Anti — Autonomous Agent with Persistent Memory
 
-An autonomous AI agent with evolving memory that persists between sessions.
+Un agente de IA autónomo con memoria persistente.
 
 ---
 
-## ⚡ Quick Start
+## ⚡ Quick Start / Inicio Rápido
 
 ```bash
-git clone https://github.com/your-user/Anti.git
+# Clone / Clonar
+git clone https://github.com/Hunther4/Anti.git
 cd Anti
-python -m venv venv && source venv/bin/activate
+
+# Create venv / Crear entorno virtual
+python -m venv venv
+source venv/bin/activate
+
+# Install / Instalar dependencias
 pip install requests aiohttp
-python -m core.agent
+
+# Run / Ejecutar
+python main.py
 ```
 
 ---
 
-## 🔌 Supported Providers
+## 🔌 Supported Providers / Proveedores Soportados
 
-| Provider | Port | API Key | Notes |
-|:---------|:-------|:-------|:-------|
-| **LM Studio** | 1234 | ❌ | Auto-detected |
-| **Ollama** | 11434 | ❌ | Auto-detected |
-| **OpenAI** | cloud | ✅ | Set OPENAI_API_KEY |
-| **Gemini** | cloud | ✅ | Set GEMINI_API_KEY |
+| Provider | Port | API Key | Auto-detect |
+|:---------|:-------|:-------|:----------:|
+| **LM Studio** | 1234 | ❌ | ✅ |
+| **Ollama** | 11434 | ❌ | ✅ |
+| **OpenAI** | cloud | ✅ | ❌ |
+| **Gemini** | cloud | ✅ | ❌ |
 
 Set `"provider": "auto"` in config.json for automatic detection.
 
 ---
 
-## 🔐 API Keys (Optional)
+## 🔐 API Keys (Optional / Opcional)
 
 Only for OpenAI/Gemini. LM Studio/Ollama need no keys.
 
 ```bash
-# Option 1: Interactive script
+# Option 1 / Opción 1
 ./setup-keys.sh
 
-# Option 2: Environment variable
+# Option 2 / Opción 2
 export OPENAI_API_KEY=sk-...
 ```
 
 ---
 
-## 🧠 Memory System
+## 🧠 Memory / Memoria
 
 Anti remembers between sessions:
 - **Engrams** — factual knowledge
-- **Patterns** — lessons learned  
-- **Skills** — evolved behavior rules
+- **Patterns** — lessons learned
+- **Skills** — evolved rules
 - **Logs** — conversation history
 
-### Commands
+### Commands / Comandos
 
 ```
-reflect   — Analyze experiences, generate new skills
-memories  — Show memory summary
-engra     — List engrams
-forget    — Erase all memory
-```
-
----
-
-## 🛠️ Other Commands
-
-```
-help       — Show help
-status     — Show system status
-search    — Force web search
-benchmark — Run performance test
-exit      — Exit
+reflect    — Analyze experiences / Analizar experiencias
+memories  — Show summary / Mostrar resumen
+forget    — Erase all / Borrar todo
 ```
 
 ---
 
-## ⚙️ Configuration
+## 🛠️ Other Commands / Otros Comandos
 
-```json
-{
-  "provider": "auto",
-  "model": null,
-  "max_iterations": 10,
-  "auto_reflect_every_n_tasks": 5
-}
+```
+help       — Show help / Mostrar ayuda
+status     — Show status / Mostrar estado
+search    — Force search / Forzar búsqueda
+exit      — Exit / Salir
 ```
 
 ---
 
-## 📂 Structure
+## 📂 Structure / Estructura
 
 ```
-src/
-├── agent.py        # Main CLI
-├── brain.py       # Chat logic
-├── memory.py      # Memory
-└── providers/    # Multi-provider support
-memory/
-├── skills/       # 44 skills
-└── engrams/     # Persistent knowledge
-config.json
+src/          # Core code / Código principal
+memory/       # Persistent memory / Memoria
+workspace/    # Work files / Archivos de trabajo
+lectura/      # Reference docs / Docs de referencia
+extras/       # Non-core / No esencial
 ```
 
 ---
@@ -115,16 +104,13 @@ config.json
 ## ❓ FAQ
 
 **GPU required?**
-Only for local providers (LM Studio/Ollama). Cloud providers need internet only.
+Only for local providers (LM Studio/Ollama).
 
 **How to change model?**
-Load different model in LM Studio/Ollama, or set "model" in config.json.
-
-**What if no provider running?**
-Start LM Studio/Ollama, or set API key for OpenAI/Gemini.
+Set "model" in config.json or load different model in LM Studio/Ollama.
 
 ---
 
 ## 📜 License
 
-See LICENSE file for details.
+MIT — See LICENSE file.
