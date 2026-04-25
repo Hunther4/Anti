@@ -1,116 +1,196 @@
 # Anti — Autonomous Agent with Persistent Memory
-
-Un agente de IA autónomo con memoria persistente.
+# Anti — Agente Autónomo con Memoria Persistente
 
 ---
 
-## ⚡ Quick Start / Inicio Rápido
+## ⚡ Quick Start
+## ⚡ Inicio Rápido
 
 ```bash
-# Clone / Clonar
 git clone https://github.com/Hunther4/Anti.git
 cd Anti
 
-# Create venv / Crear entorno virtual
 python -m venv venv
 source venv/bin/activate
 
-# Install / Instalar dependencias
 pip install requests aiohttp
 
-# Run / Ejecutar
 python main.py
 ```
 
 ---
 
-## 🔌 Supported Providers / Proveedores Soportados
+## 🔌 Supported Providers
+## 🔌 Proveedores Soportados
+
+Anti automatically detects which provider you have running:
 
 | Provider | Port | API Key | Auto-detect |
 |:---------|:-------|:-------|:----------:|
-| **LM Studio** | 1234 | ❌ | ✅ |
-| **Ollama** | 11434 | ❌ | ✅ |
-| **OpenAI** | cloud | ✅ | ❌ |
-| **Gemini** | cloud | ✅ | ❌ |
+| LM Studio | 1234 | ❌ | ✅ |
+| Ollama | 11434 | ❌ | ✅ |
+| OpenAI | cloud | ✅ | ❌ |
+| Gemini | cloud | ✅ | ❌ |
 
 Set `"provider": "auto"` in config.json for automatic detection.
 
+Anti detecta automáticamente qué proveedor tenés ejecutando:
+
+| Proveedor | Puerto | API Key | Auto-detect |
+|:---------|:-------|:-------|:----------:|
+| LM Studio | 1234 | ❌ | ✅ |
+| Ollama | 11434 | ❌ | ✅ |
+| OpenAI | cloud | ✅ | ❌ |
+| Gemini | cloud | ✅ | ❌ |
+
+Poné `"provider": "auto"` en config.json para detección automática.
+
 ---
 
-## 🔐 API Keys (Optional / Opcional)
+## 🔐 API Keys Configuration
+## 🔐 Configuración de API Keys
 
-Only for OpenAI/Gemini. LM Studio/Ollama need no keys.
+Only needed if using OpenAI or Gemini. LM Studio/Ollama need no keys.
+
+### Option 1: Interactive script
 
 ```bash
-# Option 1 / Opción 1
+chmod +x setup-keys.sh
 ./setup-keys.sh
+```
 
-# Option 2 / Opción 2
+### Option 2: Environment variable
+
+```bash
+export OPENAI_API_KEY=sk-...
+```
+
+Solo necesarias para OpenAI o Gemini. LM Studio/Ollama no necesitan keys.
+
+### Opción 1: Script interactivo
+
+```bash
+chmod +x setup-keys.sh
+./setup-keys.sh
+```
+
+### Opción 2: Variable de entorno
+
+```bash
 export OPENAI_API_KEY=sk-...
 ```
 
 ---
 
-## 🧠 Memory / Memoria
+## 🧠 Memory System
+## 🧠 Sistema de Memoria
 
-Anti remembers between sessions:
+Anti remembers information between sessions:
+
 - **Engrams** — factual knowledge
 - **Patterns** — lessons learned
-- **Skills** — evolved rules
+- **Skills** — evolved behavior rules
 - **Logs** — conversation history
 
-### Commands / Comandos
+### Commands
 
 ```
-reflect    — Analyze experiences / Analizar experiencias
-memories  — Show summary / Mostrar resumen
-forget    — Erase all / Borrar todo
+reflect    — Analyze experiences and generate new skills
+memories  — Show memory summary
+engra     — List all engrams
+forget    — Erase all memory
+```
+
+Anti recuerda información entre sesiones:
+
+- **Engrams** — conocimiento fáctico
+- **Patrones** — lecciones aprendidas
+- **Skills** — reglas de comportamiento evolucionadas
+- **Logs** — historial de conversaciones
+
+### Comandos
+
+```
+reflect    — Analizar experiencias y generar nuevos skills
+memories  — Mostrar resumen de memoria
+engra     — Listar todos los engrams
+forget    — Borrar toda la memoria
 ```
 
 ---
 
-## 🛠️ Other Commands / Otros Comandos
+## 🛠️ Commands
+## 🛠️ Comandos
 
 ```
-help       — Show help / Mostrar ayuda
-status     — Show status / Mostrar estado
-search    — Force search / Forzar búsqueda
-exit      — Exit / Salir
+help       — Show help
+status     — Show system status
+search    — Force web search
+exit      — Exit
+```
+
+```
+help       — Mostrar ayuda
+status     — Mostrar estado del sistema
+search    — Forzar búsqueda web
+exit      — Salir
 ```
 
 ---
 
-## 📂 Structure / Estructura
+## 📂 Project Structure
+## 📂 Estructura del Proyecto
 
 ```
-src/          # Core code / Código principal
-memory/       # Persistent memory / Memoria
-workspace/    # Work files / Archivos de trabajo
-lectura/      # Reference docs / Docs de referencia
-extras/       # Non-core / No esencial
+src/          # Core code
+memory/       # Persistent memory
+workspace/    # Work files
+lectura/      # Reference docs
+extras/       # Non-core files
+```
+
+```
+src/          # Código principal
+memory/       # Memoria persistente
+workspace/    # Archivos de trabajo
+lectura/      # Docs de referencia
+extras/       # Archivos no esenciales
 ```
 
 ---
 
 ## 🔒 Security
+## 🔒 Seguridad
 
 - .gitignore excludes .env and keys
 - shell=False prevents injection
 - Specific exception handling
 - No data sent externally (local providers)
 
+- .gitignore excluye .env y claves
+- shell=False previene inyección
+- Manejo de excepciones específicas
+- No se envían datos externamente (proveedores locales)
+
 ---
 
 ## ❓ FAQ
+## ❓ Preguntas Frecuentes
 
 **GPU required?**
-Only for local providers (LM Studio/Ollama).
+Only for local providers (LM Studio/Ollama). Cloud providers need internet only.
 
 **How to change model?**
-Set "model" in config.json or load different model in LM Studio/Ollama.
+Set "model" in config.json, or load different model in LM Studio/Ollama.
+
+**¿GPU requerida?**
+Solo para proveedores locales (LM Studio/Ollama). Los proveedores en la nube solo necesitan internet.
+
+**¿Cómo cambiar modelo?**
+Configurá "model" en config.json, o cargá otro modelo en LM Studio/Ollama.
 
 ---
 
 ## 📜 License
 
-MIT — See LICENSE file.
+MIT — See LICENSE file for details.
