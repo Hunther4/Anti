@@ -1,0 +1,37 @@
+[
+    {
+        "model": "Gemma 4 E4B",
+        "timestamp": "20260424_225311",
+        "avg_tps": 54.77758679305539,
+        "total_duration": 152.837063,
+        "report_file": "sentinel_Gemma 4 E4B_20260424_225311.md"
+    },
+    {
+        "model": "Qwen 2.5 7B",
+        "timestamp": "20260424_230244",
+        "avg_tps": 44.792507650437855,
+        "total_duration": 92.226568,
+        "report_file": "sentinel_Qwen 2.5 7B_20260424_230244.md"
+    },
+    {
+        "model": "Qwen 2.5 7B",
+        "timestamp": "20260424_230806",
+        "avg_tps": 46.6767307681233,
+        "total_duration": 80.344255,
+        "report_file": "sentinel_Qwen 2.5 7B_20260424_230806.md"
+    },
+    {
+        "model": "Qwen 2.5 7B",
+        "timestamp": "20260424_231146",
+        "avg_tps": 47.04940227664839,
+        "total_duration": 121.506258,
+        "report_file": "sentinel_Qwen 2.5 7B_20260424_231146.md"
+    },
+    {
+        "model": "Gemma 4 E4B",
+        "timestamp": "20260424_231436",
+        "avg_tps": 54.19565933883049,
+        "total_duration": 288.624766,
+        "report_file": "sentinel_Gemma 4 E4B_20260424_231436.md"
+    }
+]

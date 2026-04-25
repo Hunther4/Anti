@@ -1,0 +1,32 @@
+{
+    "fundamental-architecture-patterns": {
+        "usos": 22,
+        "fallos": 4,
+        "ultimo_uso": "2026-04-24T23:19:24.956961"
+    },
+    "artefactos-reporte": {
+        "usos": 21,
+        "fallos": 4,
+        "ultimo_uso": "2026-04-24T23:19:24.957116"
+    },
+    "cuerpo-operativo-misterio": {
+        "usos": 21,
+        "fallos": 4,
+        "ultimo_uso": "2026-04-24T23:19:24.957308"
+    },
+    "primary_skills": {
+        "usos": 17,
+        "fallos": 3,
+        "ultimo_uso": "2026-04-24T23:19:24.957494"
+    },
+    "case-study-drack": {
+        "usos": 21,
+        "fallos": 4,
+        "ultimo_uso": "2026-04-24T23:19:24.957674"
+    },
+    "Evolucion_20260420_231026": {
+        "usos": 4,
+        "fallos": 1,
+        "ultimo_uso": "2026-04-24T23:16:34.308009"
+    }
+}

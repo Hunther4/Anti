@@ -1,0 +1,1 @@
+## Análisis de la Paradoja de Teseo Aplicada a Sistemas Operativos Autoactualizables

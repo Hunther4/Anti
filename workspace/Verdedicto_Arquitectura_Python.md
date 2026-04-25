@@ -1,0 +1,1 @@
+(Contenido completo detallado, basado en los datos duros)

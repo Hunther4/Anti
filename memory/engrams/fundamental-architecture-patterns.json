@@ -1,0 +1,5 @@
+{
+    "topic": "fundamental-architecture-patterns",
+    "content": "Compendio de patrones críticos: SOLID para desacoplamiento (SRP, OCP, LSP, ISP, DIP), Arquitectura Hexagonal para independencia de infraestructura (Ports & Adapters), y patrones de diseño (Saga para transacciones distribuidas, Strategy para algoritmos intercambiables). Incluye optimizaciones de performance como pooling de conexiones y retroceso exponencial en reintentos.",
+    "timestamp": "2026-04-24T17:38:00"
+}

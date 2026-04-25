@@ -1,4 +1,4 @@
-from core.agent import AntiAgent
+from src.agent import AntiAgent
 
 
 if __name__ == "__main__":
