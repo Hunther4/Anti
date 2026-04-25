@@ -44,6 +44,10 @@ Anti automatically detects which provider you have running. No configuration nee
 
 Set `"provider": "auto"` in config.json for automatic detection, or specify a provider directly.
 
+### Provider Performance Recommendation
+
+For tool-heavy workflows involving JSON output, function calling, or structured tool execution, we strongly recommend using models from the **Llama 3.3 8B lineage** (such as Dolphin or Abliterated variants) or **Qwen 2.5 Coder**. These models exhibit significantly lower rates of ethical rejections and false positives when tasked with tool invocation, making them ideal for autonomous agent workflows where reliability is critical.
+
 ## 🔌 Proveedores Soportados
 
 Anti detecta automáticamente qué proveedor tenés ejecutando. No necesitás configuración para proveedores locales.
@@ -56,6 +60,10 @@ Anti detecta automáticamente qué proveedor tenés ejecutando. No necesitás co
 | Gemini | cloud | ✅ | ❌ |
 
 Poné `"provider": "auto"` en config.json para detección automática, o especificá un proveedor directamente.
+
+### Recomendación de Rendimiento por Proveedor
+
+Para flujos de trabajo intensivos en herramientas que involucran salida JSON, llamadas a funciones o ejecución estructurada de herramientas, recomendamos firmemente usar modelos de la **rama Llama 3.3 8B** (como variantes Dolphin o Abliterated) o **Qwen 2.5 Coder**. Estos modelos exhiben tasas significativamente más bajas de rechazos éticos y falsos positivos cuando se les asigna invocación de herramientas, haciéndolos ideales para flujos de trabajo de agentes autónomos donde la confiabilidad es crítica.
 
 ---
 
@@ -106,6 +114,17 @@ One of Anti's most powerful features is its persistent memory system that mainta
 - **Skills** — Evolved behavior rules generated automatically
 - **Logs** — Complete conversation history with success/failure tracking
 
+### Engram System Architecture
+
+Anti's memory architecture is designed around the concept of "Engrams" — persistent memory units that capture:
+
+1. **Factual Engrams**: Concrete knowledge, facts, and configuration data discovered during interactions
+2. **Pattern Engrams**: Recurring behavioral patterns and successful strategies that can be reused
+3. **Skill Engrams**: Evolved system behaviors generated through the reflect/consolidate cycle
+4. **Log Engrams**: Complete interaction histories with success/failure metrics for continuous improvement
+
+Each Engram is stored with metadata including timestamp, context relevance score, and usage frequency, enabling intelligent retrieval and priority-based management.
+
 ## 🧠 Sistema de Memoria
 
 Una de las características más poderosas de Anti es su sistema de memoria persistente que mantiene contexto entre sesiones.
@@ -115,6 +134,17 @@ Una de las características más poderosas de Anti es su sistema de memoria pers
 - **Skills** — Reglas de comportamiento evolucionadas automáticamente
 - **Logs** — Historial completo de conversaciones con seguimiento de éxito/fallo
 
+### Arquitectura del Sistema de Engrams
+
+La arquitectura de memoria de Anti está diseñada alrededor del concepto de "Engrams" — unidades de memoria persistente que capturan:
+
+1. **Engrams Factual**: Conocimiento concreto, hechos y datos de configuración descubiertos durante las interacciones
+2. **Engrams de Patrones**: Patrones conductuales recurrentes y estrategias exitosas que pueden ser reutilizadas
+3. **Engrams de Skills**: Comportamientos del sistema evolucionados generados a través del ciclo reflect/consolidate
+4. **Engrams de Logs**: Historiales de interacción completos con métricas de éxito/fallo para mejora continua
+
+Cada Engram se almacena con metadatos incluyendo marca de tiempo, puntuación de relevancia de contexto y frecuencia de uso, permitiendo recuperación inteligente y gestión basada en prioridades.
+
 ---
 
 ## 🛠️ Available Commands
@@ -122,26 +152,192 @@ Una de las características más poderosas de Anti es su sistema de memoria pers
 | Command | Description |
 |:--------|:-----------|
 | help | Show all available commands |
-| status | Display system status and connection info |
-| reflect | Analyze recent experiences and generate new skills |
-| memories | Show memory summary |
-| engra | List all stored engrams |
+| status | Display system status, connection info, and integrity matrix |
+| reflect | Force a Dual Evolution cycle. Extract new Engrams from recent logs and refine Skills |
+| consolidate | Initiate autonomous maintenance. Purge obsolete data and merge redundant Engram and Skill clusters using LLM |
+| memories / engra | Reports on long-term memory retention status |
 | search \<query\> | Force a web search |
-| benchmark | Run performance benchmark |
+| benchmark | Run the Sentinel Gauntlet — 5-phase stress test measuring TPS, latency, and model resilience |
+| reasoner | Toggle auto-critique mode (improves accuracy at the cost of higher latency) |
+| admin move \<src\> \<dst\> | Raw workspace file move operation |
+| admin delete \<path\> | Raw workspace file deletion |
 | exit | Exit the agent |
+
+### Extended Command Reference
+
+#### reflect — Dual Evolution Cycle
+Forces immediate execution of Anti's self-evolution system:
+- Extracts new knowledge Engrams from recent conversation logs
+- Analyzes success/failure patterns
+- Generates refined behavioral Skills
+- Updates the internal skill hierarchy
+
+#### consolidate — Autonomous Maintenance
+Initiates full system maintenance:
+- Identifies and purges obsolete data
+- Merges semantically redundant Engram clusters
+- Merges duplicate or overlapping Skill definitions
+- Optimizes storage using LLM-guided deduplication
+
+#### reasoner — Auto-Critique Mode
+Toggles the internal self-critique loop:
+- **ON**: Model generates response → Elite Critic analyzes ��� Refined output delivered
+- **OFF**: Direct response delivery
+- Trade-off: Higher quality vs. lower latency
+
+#### benchmark — Sentinel Gauntlet
+Executes the 5-phase stress test:
+1. **Brute Force**: TPS and latency measurement via complex code generation
+2. **Sentinel Integrity**: Context management evaluation
+3. **Superior Cognition**: Philosophical/technical reasoning evaluation
+4. **Agency**: Tool execution success (SEARCH/READ/WRITE)
+5. **Persona Check**: Identity fidelity verification
+
+#### admin — Workspace Management
+Raw file operations for advanced users:
+- `admin move`: Move files within workspace
+- `admin delete`: Delete files from workspace
+**Warning**: These operations bypass safety checks. Use with caution.
 
 ## 🛠️ Comandos Disponibles
 
 | Comando | Descripción |
 |:--------|:-----------|
 | help | Mostrar todos los comandos disponibles |
-| status | Mostrar estado del sistema e información de conexión |
-| reflect | Analizar experiencias recientes y generar nuevos skills |
-| memories | Mostrar resumen de memoria |
-| engra | Listar todos los engrams almacenados |
+| status | Mostrar estado del sistema, información de conexión y matriz de integridad |
+| reflect | Forzar un ciclo de Evolución Dual. Extrae nuevos Engrams de los logs recientes y refina las Skills |
+| consolidate | Inicia el mantenimiento autónomo. Purga datos obsoletos y fusiona clusters de Engrams y Skills redundantes mediante el LLM |
+| memories / engra | Reportes del estado de retención de la memoria a largo plazo |
 | search \<consulta\> | Forzar una búsqueda web |
-| benchmark | Ejecutar benchmark de rendimiento |
+| benchmark | Ejecutar el Sentinel Gauntlet — test de estrés de 5 fases para medir TPS, latencia y resiliencia del modelo |
+| reasoner | Activar/Desactivar el modo de autocrítica (mejora la precisión a costa de mayor latencia) |
+| admin move \<origen\> \<destino\> | Operación cruda de movimiento de archivos en el workspace |
+| admin delete \<ruta\> | Eliminación cruda de archivos del workspace |
 | exit | Salir del agente |
+
+### Referencia Extendida de Comandos
+
+#### reflect — Ciclo de Evolución Dual
+Fuerza la ejecución inmediata del sistema de auto-evolución de Anti:
+- Extrae nuevos Engrams de conocimiento de los logs de conversación recientes
+- Analiza patrones de éxito/fallo
+- Genera Skills conductuales refinadas
+- Actualiza la jerarquía interna de skills
+
+#### consolidate — Mantenimiento Autónomo
+Inicia el mantenimiento completo del sistema:
+- Identifica y purga datos obsoletos
+- Fusiona clusters de Engrams semánticamente redundantes
+- Fusiona definiciones de Skills duplicadas o superpuestas
+- Optimiza el almacenamiento usando desduplicación guiada por LLM
+
+#### reasoner — Modo de Autocrítica
+Alterna el loop interno de autocrítica:
+- **ON**: El modelo genera respuesta → El Crítico de Élite analiza → Respuesta refinada entregada
+- **OFF**: Entrega directa de respuesta
+- Balance: Mayor calidad vs. menor latencia
+
+#### benchmark — Sentinel Gauntlet
+Ejecuta el test de estrés de 5 fases:
+1. **Potencia Bruta**: Medición de TPS y latencia vía generación de código compleja
+2. **Integridad Sentinel**: Evaluación de gestión de contexto
+3. **Cognición Superior**: Evaluación de razonamiento filosófico/técnico
+4. **Agencia**: Éxito de ejecución de herramientas (SEARCH/READ/WRITE)
+5. **Persona Check**: Verificación de fidelidad de identidad
+
+#### admin — Gestión del Workspace
+Operaciones crudas de archivos para usuarios avanzados:
+- `admin move`: Mover archivos dentro del workspace
+- `admin delete`: Eliminar archivos del workspace
+**Advertencia**: Estas operaciones sortean los controles de seguridad. Usar con precaución.
+
+---
+
+## 🧩 Modular Identity — Anti vs Neu
+
+Anti implements a dual-persona architecture that adapts its identity based on the task context:
+
+### Anti — The Supreme Analyst (El Analista Supremo)
+
+**Profile**: High-density technical authority
+- **Core Character**: The Senior Architect — 15+ years experience, GDE & MVP
+- **Philosophy**: CONCEPTS > CODE, SOLID FOUNDATIONS, AGAINST IMMEDIACY
+- **Behavior**: Demands hard data, benchmarks, percentages, and measurable metrics
+- **Output Style**: Comprehensive analysis, vulnerability assessments, architecture reports
+- **Tone**: Passionate and direct, from a place of caring about excellence
+- **Specialization**: Security audits, architectural design decisions, in-depth code analysis, vulnerability identification
+
+Anti actively despises generalities and hand-waving. Every claim must be backed by:
+- Quantitative benchmarks
+- Percentage-based performance metrics
+- Concrete code examples
+- Traceable evidence
+
+### Neu — The Executor/Tutor (El Ejecutor/Tutor)
+
+**Profile**: Younger brother, action-oriented pragmatist
+- **Core Character**: The Hands-On Developer — execution-focused, clean-code advocate
+- **Philosophy**: Get things done, refactor early and often, minimal friction
+- **Behavior**: Direct code execution, terminal efficiency, rapid prototyping
+- **Output Style**: Clean refactoring, actionable solutions, focused changes
+- **Tone**: Practical, concise, solution-oriented
+- **Specialization**: Daily code refactoring, quick fixes, terminal-based execution, straightforward improvements
+
+Neu focuses on making things work efficiently with minimal overhead. Less analysis, more action.
+
+### When Each Persona Activates
+
+| Context | Persona | Reason |
+|:--------|:--------|:-------|
+| Security audit, architecture design | **Anti** | Requires deep analysis and measurable metrics |
+| Daily refactoring, quick fixes | **Neu** | Requires rapid execution, not deep analysis |
+| Vulnerability assessment | **Anti** | Demands benchmarks and percentages |
+| Terminal-based task | **Neu** | Focuses on execution speed |
+| Teaching a concept | **Anti** | Detailed explanation with foundations |
+| Quick implementation | **Neu** | Direct code, no unnecessary explanation |
+
+## 🧩 Identidad Modular — Anti vs Neu
+
+Anti implementa una arquitectura de doble personalidad que adapta su identidad según el contexto de la tarea:
+
+### Anti — El Analista Supremo
+
+**Perfil**: Autoridad técnica de alta densidad
+- **Carácter Central**: El Arquitecto Senior — 15+ años de experiencia, GDE & MVP
+- **Filosofía**: CONCEPTOS > CÓDIGO, FUNDAMENTOS SÓLIDOS, CONTRA LA INMEDIATEZ
+- **Comportamiento**: Exige datos duros, benchmarks, porcentajes y métricas medibles
+- **Estilo de Output**: Análisis comprehensivo, informes de arquitectura, evaluaciones de vulnerabilidades
+- **Tono**: Passionado y directo, desde un lugar de cuidado por la excelencia
+- **Especialización**: Auditorías de seguridad, decisiones de diseño arquitectónico, análisis profundo de código, identificación de vulnerabilidades
+
+Anti desprecia activamente las generalidades y el bla-bla. Cada afirmación debe estar respaldada por:
+- Benchmarks cuantitativos
+- Métricas de rendimiento basadas en porcentajes
+- Ejemplos de código concretos
+- Evidencia rastreable
+
+### Neu — El Ejecutor/Tutor
+
+**Perfil**: Hermano menor, pragmático orientado a la acción
+- **Carácter Central**: El Desarrollador Práctico — centrado en ejecución, defensor del código limpio
+- **Filosofía**: Hacer las cosas, refactorizar temprano y a menudo, fricción mínima
+- **Comportamiento**: Ejecución de código directa, eficiencia en terminal, prototipado rápido
+- **Estilo de Output**: Refactorización limpia, soluciones accionables, cambios enfocados
+- **Tono**: Práctico, conciso, orientado a soluciones
+- **Especialización**: Refactorización diaria del código, fixes rápidos, ejecución basada en terminal, mejoras directas
+
+Neu se enfoca en hacer que las cosas funcionen eficientemente con mínimo overhead. Menos análisis, más acción.
+
+### Cuándo Se Activa Cada Personalidad
+
+| Contexto | Personalidad | Razón |
+|:---------|:------------|:------|
+| Auditoría de seguridad, diseño arquitectónico | **Anti** | Requiere análisis profundo y métricas medibles |
+| Refactorización diaria, fixes rápidos | **Neu** | Requiere ejecución rápida, no análisis profundo |
+| Evaluación de vulnerabilidades | **Anti** | Exige benchmarks y porcentajes |
+| Tarea basada en terminal | **Neu** | Se enfoca en velocidad de ejecución |
+| Enseñar un concepto | **Anti** | Explicación detallada con fundamentos |
+| Implementación rápida | **Neu** | Código directo, sin explicación innecesaria |
 
 ---
 
@@ -154,6 +350,11 @@ Anti/
 │   ├── brain.py          # Chat logic and LLM communication
 │   ├── memory.py         # Memory management
 │   ├── tools.py          # Built-in tools
+│   ├── evolver.py        # Skill evolution system
+│   ├── compactor.py      # Memory compaction
+│   ├── consolidator.py   # Autonomous maintenance
+│   ├── scorer.py         # Performance scoring
+│   ├── benchmark.py     # Sentinel Gauntlet runner
 │   ├── providers/       # Multi-provider support
 │   │   ├── lmstudio.py
 │   │   ├── ollama.py
@@ -162,9 +363,11 @@ Anti/
 │   └── ...
 ├── memory/                 # Persistent memory
 │   ├── skills/          # Behavior skills
-│   └── engrams/        # Factual knowledge
+│   ├── engrams/        # Factual knowledge
+│   └── logs            # Conversation history
 ├── workspace/             # Work files directory
-├── lectura/               # Reference documents
+├── docs/                  # Documentation
+├── lectura/              # Reference documents
 ├── config.json           # Configuration file
 ├── main.py               # Entry point
 └── setup-keys.sh         # API key setup script
@@ -179,6 +382,11 @@ Anti/
 │   ├── brain.py          # Lógica de chat y comunicación LLM
 │   ├── memory.py         # Gestión de memoria
 │   ├── tools.py          # Herramientas incorporadas
+│   ├── evolver.py        # Sistema de evolución de skills
+│   ├── compactor.py      # Compactación de memoria
+│   ├── consolidator.py # Mantenimiento autónomo
+│   ├── scorer.py        # Puntuación de rendimiento
+│   ├── benchmark.py     # Ejecutor del Sentinel Gauntlet
 │   ├── providers/       # Soporte multi-proveedor
 │   │   ├── lmstudio.py
 │   │   ├── ollama.py
@@ -187,8 +395,10 @@ Anti/
 │   └── ...
 ├── memory/                 # Memoria persistente
 │   ├── skills/          # Skills de comportamiento
-│   └── engrams/        # Conocimiento factual
+│   ├── engrams/        # Conocimiento factual
+│   └── logs            # Historial de conversación
 ├── workspace/             # Directorio de archivos de trabajo
+├── docs/                  # Documentación
 ├── lectura/               # Documentos de referencia
 ├── config.json           # Archivo de configuración
 ├── main.py               # Punto de entrada
@@ -299,6 +509,15 @@ A: Anti will show a connection error. Start LM Studio or Ollama, or configure an
 **Q: Is my data secure?**
 A: Yes. Local providers never send data externally. Cloud providers use standard encryption.
 
+**Q: What's the difference between Anti and Neu?**
+A: Anti is the "Supreme Analyst" — demands benchmarks, percentages, and hard data for architectural decisions. Neu is the "Executor/Tutor" — focuses on quick code execution and daily refactoring. See the Modular Identity section for details.
+
+**Q: How does the reflect command work?**
+A: `reflect` forces a Dual Evolution cycle: it extracts new Engrams from recent logs, analyzes success/failure patterns, and generates refined behavioral Skills. Think of it as the agent's self-improvement loop.
+
+**Q: What is the Sentinel Gauntlet benchmark?**
+A: A 5-phase stress test that measures TPS (Tokens Per Second), latency, context management, tool execution success, and persona fidelity. Essential for evaluating which LLM performs best for your use case.
+
 ## ❓ Preguntas Frecuentes
 
 **P: ¿Necesito GPU?**
@@ -313,6 +532,15 @@ R: Anti mostrará un error de conexión. Iniciá LM Studio u Ollama, o configur�
 **P: ¿Mis datos están seguros?**
 R: Sí. Los proveedores locales nunca envían datos externamente. Los proveedores en la nube usan encriptación estándar.
 
+**P: ¿Cuál es la diferencia entre Anti y Neu?**
+R: Anti es el "Analista Supremo" — exige benchmarks, porcentajes y datos duros para decisiones arquitectónicas. Neu es el "Ejecutor/Tutor" — se enfoca en ejecución rápida de código y refactorización diaria. Ver la sección de Identidad Modular para detalles.
+
+**P: ¿Cómo funciona el comando reflect?**
+R: `reflect` fuerza un ciclo de Evolución Dual: extrae nuevos Engrams de los logs recientes, analiza patrones de éxito/fallo y genera Skills conductuales refinadas. Pensalo como el loop de auto-mejora del agente.
+
+**P: ¿Qué es el benchmark Sentinel Gauntlet?**
+R: Un test de estrés de 5 fases que mide TPS (Tokens Per Second), latencia, gestión de contexto, éxito de ejecución de herramientas y fidelidad de personalidad. Esencial para evaluar qué LLM funciona mejor para tu caso de uso.
+
 ---
 
 ## 📜 License
@@ -326,6 +554,36 @@ See the [LICENSE](LICENSE) file for full details.
 Este proyecto está licenciado bajo la Licencia MIT.
 
 Ver el archivo [LICENSE](LICENSE) para detalles completos.
+
+---
+
+## 📝 Authorship
+
+**Anti** was created and is maintained by **Hunther4**.
+
+The project was designed and engineered from **Maule, Chile** — with a laser focus on local, high-performance engineering for autonomous agents. Every architectural decision prioritizes local execution, privacy-by-default, and maximum control over the AI reasoning process.
+
+This is not a generic AI wrapper. Anti is purpose-built for engineers who care about:
+- **Local execution** — No data leaves your machine
+- **Persistent memory** — True context that survives sessions
+- **Autonomous evolution** — Self-improvement through the reflect/consolidate cycle
+- **Measurable excellence** — Benchmarks, percentages, and hard metrics
+
+Built from the Maule region for the world.
+
+## 📝 Autoría
+
+**Anti** fue creado y es mantenido por **Hunther4**.
+
+El proyecto fue diseñado e ingeniado desde **Maule, Chile** — con un enfoque de láser en la ingeniería local de alto rendimiento para agentes autonomous. Cada decisión arquitectónica prioriza la ejecución local, privacidad-por-defecto y máximo control sobre el proceso de razonamiento de la IA.
+
+Esto no es un wrapper genérico de IA. Anti está construido especialmente para ingenieros que se preocupan por:
+- **Ejecución local** — Ningún dato sale de tu máquina
+- **Memoria persistente** — Contexto real que sobrevive entre sesiones
+- **Evolución autónoma** — Auto-mejora a través del ciclo reflect/consolidate
+- **Excelencia medible** — Benchmarks, porcentajes y métricas duras
+
+Construido desde la región del Maule para el mundo.
 
 ---
 
