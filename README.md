@@ -252,15 +252,11 @@ See the [LICENSE](LICENSE) file for full details.
 
 **Anti** was created and is maintained by **Hunther4**.
 
-The project was designed and engineered from **Maule, Chile** — with a laser focus on local, high-performance engineering for autonomous agents. Every architectural decision prioritizes local execution, privacy-by-default, and maximum control over the AI reasoning process.
-
 This is not a generic AI wrapper. Anti is purpose-built for engineers who care about:
 - **Local execution** — No data leaves your machine
 - **Persistent memory** — True context that survives sessions
 - **Autonomous evolution** — Self-improvement through the reflect/consolidate cycle
 - **Measurable excellence** — Benchmarks, percentages, and hard metrics
-
-Built from the Maule region for the world.
 
 ---
 
@@ -521,15 +517,11 @@ Ver el archivo [LICENSE](LICENSE) para detalles completos.
 
 **Anti** fue creado y es mantenido por **Hunther4**.
 
-El proyecto fue diseñado e ingeniado desde **Maule, Chile** — con un enfoque de láser en la ingeniería local de alto rendimiento para agentes autónomos. Cada decisión arquitectónica prioriza la ejecución local, privacidad-por-defecto y máximo control sobre el proceso de razonamiento de la IA.
-
 Esto no es un wrapper genérico de IA. Anti está construido especialmente para ingenieros que se preocupan por:
 - **Ejecución local** — Ningún dato sale de tu máquina
 - **Memoria persistente** — Contexto real que sobrevive entre sesiones
 - **Evolución autónoma** — Auto-mejora a través del ciclo reflect/consolidate
 - **Excelencia medible** — Benchmarks, porcentajes y métricas duras
-
-Construido desde la región del Maule para el mundo.
 
 ---
 
