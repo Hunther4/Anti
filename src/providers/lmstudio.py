@@ -132,6 +132,14 @@ class LMStudioProvider(BaseProvider):
             self.usable = self.context_max - 2000 # Reserva básica
             self.threshold = int(self.usable * 0.8)
 
+    async def get_context_info(self) -> Dict[str, Any]:
+        """Retorna info del contexto."""
+        return {
+            "max": self.context_max,
+            "usable": self.usable,
+            "threshold": self.threshold
+        }
+
     async def check_connection(self) -> bool:
         """Verifica conexión con LM Studio."""
         return await asyncio.to_thread(self._check_connection_sync)

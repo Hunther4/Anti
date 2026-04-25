@@ -9,8 +9,8 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(script_dir) # This should be .../proyec/Anti
 sys.path.append(project_root)
 
-from core.agent import AntiAgent
-from core.benchmark import SentinelGauntlet
+from src.agent import AntiAgent
+from src.benchmark import SentinelGauntlet
 
 async def main():
     agent = AntiAgent()

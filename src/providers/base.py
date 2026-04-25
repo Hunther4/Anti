@@ -41,6 +41,11 @@ class BaseProvider(ABC):
         pass
     
     @abstractmethod
+    async def get_context_info(self) -> Dict[str, Any]:
+        """Retorna información detallada sobre el contexto."""
+        pass
+    
+    @abstractmethod
     async def check_connection(self) -> bool:
         """Verifica conexión con el proveedor."""
         pass
