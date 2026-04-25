@@ -127,4 +127,4 @@ Start LM Studio/Ollama, or set API key for OpenAI/Gemini.
 
 ## 📜 License
 
-MIT
+See LICENSE file for details.
