@@ -16,6 +16,14 @@ document.addEventListener("DOMContentLoaded", () => {
     const lecturaDropZone = document.getElementById("lectura-drop-zone");
     const lecturaFileInput = document.getElementById("lectura-file-input");
     const mentionSuggestions = document.getElementById("mention-suggestions");
+    // MCP UI elements
+    const mcpList = document.getElementById("mcp-list");
+    const addMcpBtn = document.getElementById("add-mcp-btn");
+    const mcpModal = document.getElementById("mcp-modal");
+    const mcpUrlInput = document.getElementById("mcp-url-input");
+    const mcpNameInput = document.getElementById("mcp-name-input");
+    const mcpCancelBtn = document.getElementById("mcp-cancel-btn");
+    const mcpConfirmBtn = document.getElementById("mcp-confirm-btn");
 
     let allFiles = []; // Combined list of workspace and lectura files
 
@@ -381,6 +389,94 @@ document.addEventListener("DOMContentLoaded", () => {
     updateStatus();
     updateFiles();
     updateLectura();
+    updateMCPs();
     setInterval(updateStatus, 60000);
     setInterval(updateLectura, 120000); // Cada 2 minutos
+
+    // --- MCP Section ---
+    async function updateMCPs() {
+        try {
+            const res = await fetch("/api/mcp?t=" + Date.now());
+            const data = await res.json();
+            mcpList.innerHTML = "";
+            if (!data.mcps || data.mcps.length === 0) {
+                mcpList.innerHTML = '<li style="color:var(--text-secondary);font-size:12px;padding:8px">Sin servers MCP</li>';
+            } else {
+                data.mcps.forEach(mcp => {
+                    const li = document.createElement("li");
+                    li.className = "mcp-item";
+                    const statusClass = mcp.status === "connected" ? "status-online" : "status-offline";
+                    li.innerHTML = `
+                        <div class="mcp-info">
+                            <span class="mcp-status-dot ${statusClass}">●</span>
+                            <span class="mcp-name">${mcp.name || mcp.url}</span>
+                        </div>
+                        <button class="mcp-remove-btn" data-id="${mcp.id}" title="Eliminar">×</button>
+                    `;
+                    mcpList.appendChild(li);
+                });
+                
+                // Add remove handlers
+                document.querySelectorAll(".mcp-remove-btn").forEach(btn => {
+                    btn.addEventListener("click", async (e) => {
+                        const id = e.target.dataset.id;
+                        if (!confirm("Eliminar este server MCP?")) return;
+                        const res = await fetch("/api/mcp/remove", {
+                            method: "POST",
+                            headers: {"Content-Type": "application/json"},
+                            body: JSON.stringify({id})
+                        });
+                        const data = await res.json();
+                        if (data.ok) {
+                            addMessage("Server MCP eliminado.", "system");
+                            updateMCPs();
+                        }
+                    });
+                });
+            }
+        } catch (e) {
+            console.warn("Error cargando MCPs:", e);
+        }
+    }
+
+    // MCP Modal handlers
+    addMcpBtn.addEventListener("click", () => {
+        mcpModal.classList.remove("hidden");
+        mcpUrlInput.value = "";
+        mcpNameInput.value = "";
+        mcpUrlInput.focus();
+    });
+
+    mcpCancelBtn.addEventListener("click", () => {
+        mcpModal.classList.add("hidden");
+    });
+
+    mcpConfirmBtn.addEventListener("click", async () => {
+        const url = mcpUrlInput.value.trim();
+        const name = mcpNameInput.value.trim();
+        if (!url) {
+            alert("URL requerida");
+            return;
+        }
+        try {
+            const res = await fetch("/api/mcp/add", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({url, name})
+            });
+            const data = await res.json();
+            if (data.ok) {
+                addMessage("Server MCP agregado: " + (name || url), "system");
+                mcpModal.classList.add("hidden");
+                updateMCPs();
+            }
+        } catch (e) {
+            addMessage("Error al agregar MCP: " + e.message, "system");
+        }
+    });
+
+    // Close modal on outside click
+    mcpModal.addEventListener("click", (e) => {
+        if (e.target === mcpModal) mcpModal.classList.add("hidden");
+    });
 });

@@ -173,7 +173,11 @@ def fetch_url_text(url: str) -> str:
 def write_file(filename: str, content: str, workspace_path: str = "workspace") -> str:
     """
     Write a file to the workspace directory.
+    Validates content to prevent placeholders.
     """
+    if not is_valid_content(content):
+        return "[ERROR] Contenido inválido: se detectaron placeholders o texto insuficiente. Escribí el contenido real y completo."
+
     if not os.path.exists(workspace_path):
         os.makedirs(workspace_path)
     
@@ -249,3 +253,45 @@ async def autonomous_research(query: str, max_links: int = 5) -> str:
     consolidated.append("INSTRUCCION: Usa estos datos para generar tu informe final. No uses placeholders.")
     
     return "\n".join(consolidated)
+
+def is_valid_content(content: str) -> bool:
+    """
+    Validación robusta v2 - balance entre estricto y funcional
+    """
+    if not content or len(content.strip()) < 20:
+        return False
+    
+    content_lower = content.lower()
+    obvious_placeholders = [
+        '...', '......', '.........',
+        'contenido...', 'contenido extenso',
+        'aquí va', 'aqui va', 'placeholder',
+        'texto generado', 'resumen en proceso',
+        'respuesta:', 'contenido:',
+    ]
+    
+    for p in obvious_placeholders:
+        if p in content_lower:
+            return False
+            
+    bad_patterns = [
+        r'^\.{3,}$',
+        r'^\s*\.{3,}\s*$',
+        r'^\[contenido\]$',
+        r'^contenido\s+extenso\.?$',
+    ]
+    
+    for pattern in bad_patterns:
+        if re.search(pattern, content_lower, re.MULTILINE):
+            return False
+            
+    lines = [l.strip() for l in content.split('\n') if l.strip()]
+    sentences = re.split(r'[.!?]+', content)
+    sentences = [s.strip() for s in sentences if s.strip()]
+    
+    if len(lines) < 3 and len(sentences) < 3:
+        words = re.findall(r'\b[a-zA-Záéíóúñ]{4,}\b', content)
+        if len(words) < 5:
+            return False
+            
+    return True

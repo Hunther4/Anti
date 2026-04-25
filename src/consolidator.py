@@ -27,11 +27,75 @@ class MemoryConsolidator:
         # 3. Consolidación de Skills (Síntesis)
         consolidated_skills = await self._consolidate_skills()
 
+        # 4. Auto-Purge: limpiar observaciones con bajo score
+        auto_purged = await self._auto_purge()
+        
         return {
             "deleted_decay": deleted_decay,
             "consolidated_engrams": consolidated_engrams,
-            "consolidated_skills": consolidated_skills
+            "consolidated_skills": consolidated_skills,
+            "auto_purged": auto_purged
         }
+
+    async def _auto_purge(self):
+        """
+        Auto-purge de observaciones con score bajo.
+        Elimina observaciones con importance_score < 1.0 que no fueron
+        accedidas recently.
+        
+        Returns:
+            int: Número de observaciones eliminadas
+        """
+        PURGE_THRESHOLD = 1.0
+        DAYS_INACTIVE_TO_PURGE = 30
+        
+        from datetime import timedelta
+        
+        try:
+            # Obtener observaciones con bajo score
+            low_score_obs = self.memory.archive._get_low_score_observations(
+                threshold=PURGE_THRESHOLD
+            )
+            
+            if not low_score_obs:
+                print("[*] Auto-purge: no hay observaciones con bajo score")
+                return 0
+            
+            # Filtrar las que pueden purgearse (inactivas por mucho tiempo)
+            from datetime import datetime
+            now = datetime.now()
+            to_purge = []
+            
+            for obs in low_score_obs:
+                last_accessed = obs.get("last_accessed_at")
+                
+                # Si nunca fue accedida, usar timestamp como fallback
+                if not last_accessed:
+                    last_accessed = obs.get("timestamp", "")
+                
+                # Verificar antigüedad
+                try:
+                    last_time = datetime.fromisoformat(last_accessed)
+                    days_inactive = (now - last_time).days
+                    
+                    # Purgear si	inactivas por más de DAYS_INACTIVE_TO_PURGE días
+                    if days_inactive > DAYS_INACTIVE_TO_PURGE:
+                        to_purge.append(obs["id"])
+                except (ValueError, TypeError):
+                    # Si no se puede parsear, purgear por seguridad
+                    to_purge.append(obs["id"])
+            
+            if to_purge:
+                deleted = self.memory.archive.purge_observations(to_purge)
+                print(f"[*] Auto-purge: {deleted} observaciones eliminadas")
+                return deleted
+            
+            print("[*] Auto-purge: ninguna observación califica para purgar")
+            return 0
+            
+        except Exception as e:
+            logger.warning(f"[Consolidator] Error en auto-purge: {e}")
+            return 0
 
     async def _consolidate_engrams(self):
         """Busca engrams similares y pide al LLM que los combine"""

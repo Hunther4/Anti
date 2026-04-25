@@ -171,6 +171,11 @@ class AntiAgent:
         elif cmd_lower == "consolidate":
             stats = await self.consolidator.run_maintenance()
             return f"Consolidación finalizada: {stats['deleted_decay']} purgados, {stats['consolidated_engrams']} sintetizados."
+        
+        # --- MCP Commands (Phase 3.2) ---
+        elif cmd_lower.startswith("mcp "):
+            return self._handle_mcp_command(cmd[4:].strip())
+        
         else:
             return await self._process(cmd, image_data=image_data)
 
@@ -419,18 +424,37 @@ class AntiAgent:
             is_success = score > 0
             print(f"{Colors.GREEN}[+] Score: {score} | Votes: {votes}{Colors.END}")
 
-            # ZERO-SHOT REFLECTION: Si el score es malo, forzamos una correccion
-            if score <= 0:
-                print(f"{Colors.RED}[!] Respuesta deficiente (Score {score}). Forzando autocorreccion...{Colors.END}")
-                correction_prompt = (
-                    f"Tu respuesta anterior fue evaluada y considerada ineficiente, redundante o no respondio "
-                    f"directamente a la pregunta. Re-escribe la respuesta, aplicando SINTESIS EXTREMA, "
-                    f"asegurandote de responder exactamente lo que se pidio: '{user_text}'.\n\n"
-                    f"Respuesta rechazada:\n{response}"
+            # RECURSIVE METACOGNITION: Refinamiento basado en feedback del Scorer (v2.0)
+            retries = 0
+            max_refinement_retries = 2
+            
+            while score < 0.7 and retries < max_refinement_retries:
+                retries += 1
+                print(f"{Colors.RED}[!] Calidad insuficiente (Score {score}). Iniciando refinamiento recursivo {retries}/{max_refinement_retries}...{Colors.END}")
+                
+                refinement_prompt = (
+                    f"### AUTO-CRÍTICA METACOGNITIVA\n"
+                    f"Tu respuesta anterior obtuvo un puntaje bajo ({score}) en el benchmark de calidad.\n"
+                    f"INSTRUCCIÓN ORIGINAL: '{user_text}'\n"
+                    f"RESPUESTA ANTERIOR: '{response[:500]}...'\n\n"
+                    f"ERRORES DETECTADOS: Posible redundancia, falta de datos duros (números/porcentajes) o placeholders.\n"
+                    f"ACCIÓN: Genera una versión SUPERIOR. Aplica SINTESIS EXTREMA, elimina introducciones innecesarias y "
+                    f"asegúrate de que cada afirmación esté respaldada por un dato o métrica si es posible."
                 )
-                response, _ = await self.brain.chat([{"role": "user", "content": correction_prompt}])
+                
+                response, _ = await self.brain.chat([{"role": "user", "content": refinement_prompt}])
                 response = response.replace("<thought>", "").replace("</thought>", "").strip()
-                print(f"{Colors.GREEN}[+] Respuesta corregida y lista.{Colors.END}")
+                
+                # Re-evaluar la nueva respuesta
+                print(f"{Colors.BLUE}[*] Re-evaluando respuesta refinada...{Colors.END}")
+                eval_result = await self.scorer.evaluate(response, user_text)
+                score = eval_result["score"]
+                votes = eval_result["votes"]
+                print(f"{Colors.GREEN}[+] Nuevo Score: {score} | Votes: {votes}{Colors.END}")
+
+            if retries > 0:
+                print(f"{Colors.GREEN}[+] Refinamiento completado exitosamente.{Colors.END}")
+                is_success = score >= 0.7
 
         except Exception as e:
             print(f"{Colors.RED}[!] Error en Scorer: {e}{Colors.END}")
@@ -608,6 +632,142 @@ class AntiAgent:
 
     # --- UI Commands ---
 
+    def _handle_mcp_command(self, args):
+        """CLI handler for MCP (Model Capability Protocol) commands."""
+        parts = args.strip().split(maxsplit=1)
+        if not parts:
+            return "MCP — Uso: mcp <list|install|remove|help> [id]"
+        
+        action = parts[0].lower()
+        mcp_id = parts[1].strip() if len(parts) > 1 else ""
+        
+        if action == "list":
+            return self._mcp_list()
+        elif action == "install":
+            if not mcp_id:
+                return "MCP install — Uso: mcp install <id>"
+            return self._mcp_install(mcp_id)
+        elif action == "remove":
+            if not mcp_id:
+                return "MCP remove — Uso: mcp remove <id>"
+            return self._mcp_remove(mcp_id)
+        elif action == "help":
+            if not mcp_id:
+                return "MCP help — Uso: mcp help <id>"
+            return self._mcp_help(mcp_id)
+        else:
+            return f"MCP: comando '{action}' no reconocido. Usa: list, install, remove, help"
+
+    def _mcp_list(self):
+        """Lista MCPs instalados y disponibles."""
+        skills_dir = os.path.join(self.base_dir, "memory", "skills")
+        if not os.path.exists(skills_dir):
+            return "No hay MCPs disponibles."
+        
+        folders = [f for f in os.listdir(skills_dir) 
+                  if os.path.isdir(os.path.join(skills_dir, f))]
+        
+        if not folders:
+            return "No hay MCPs instalados."
+        
+        lines = ["MCPs instalados:", ""]
+        for folder in sorted(folders):
+            skill_path = os.path.join(skills_dir, folder, "SKILL.md")
+            if os.path.exists(skill_path):
+                try:
+                    with open(skill_path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    # Parse frontmatter
+                    name = folder
+                    description = ""
+                    if content.startswith("---"):
+                        end_idx = content.find("\n---", 3)
+                        if end_idx > 0:
+                            fm_text = content[3:end_idx].strip()
+                            for line in fm_text.splitlines():
+                                if ":" in line:
+                                    key, _, val = line.partition(":")
+                                    if key.strip() == "name":
+                                        name = val.strip()
+                                    elif key.strip() == "description":
+                                        description = val.strip()
+                    lines.append(f"  • {name}" + (f" — {description}" if description else ""))
+                except Exception:
+                    lines.append(f"  • {folder}")
+            else:
+                lines.append(f"  • {folder}")
+        
+        return "\n".join(lines)
+
+    def _mcp_install(self, mcp_id):
+        """Instala un MCP (download + save)."""
+        # Sanitize ID for folder name
+        safe_id = re.sub(r'[^a-zA-Z0-9_-]', '-', mcp_id.lower())
+        skills_dir = os.path.join(self.base_dir, "memory", "skills")
+        
+        # Check if already exists
+        existing_path = os.path.join(skills_dir, safe_id, "SKILL.md")
+        if os.path.exists(existing_path):
+            return f"MCP '{mcp_id}' ya está instalado."
+        
+        # Create MCP directory with template SKILL.md
+        mcp_dir = os.path.join(skills_dir, safe_id)
+        os.makedirs(mcp_dir, exist_ok=True)
+        
+        skill_path = os.path.join(mcp_dir, "SKILL.md")
+        template = f"""---
+name: {safe_id}
+description: MCP instalado via mcp install
+category: user-installed
+---
+
+# {safe_id}
+
+Contenido del MCP instalado. Editar este archivo para personalizar el comportamiento.
+"""
+        with open(skill_path, "w", encoding="utf-8") as f:
+            f.write(template)
+        
+        # Reload skills if available
+        if hasattr(self.memory, "skills"):
+            self.memory.skills.reload()
+        
+        return f"MCP '{mcp_id}' instalado correctamente en memory/skills/{safe_id}/"
+
+    def _mcp_remove(self, mcp_id):
+        """Remueve un MCP."""
+        safe_id = re.sub(r'[^a-zA-Z0-9_-]', '-', mcp_id.lower())
+        skills_dir = os.path.join(self.base_dir, "memory", "skills")
+        mcp_dir = os.path.join(skills_dir, safe_id)
+        
+        if not os.path.exists(mcp_dir):
+            return f"MCP '{mcp_id}' no encontrado."
+        
+        import shutil
+        shutil.rmtree(mcp_dir)
+        
+        # Reload skills if available
+        if hasattr(self.memory, "skills"):
+            self.memory.skills.reload()
+        
+        return f"MCP '{mcp_id}' removido correctamente."
+
+    def _mcp_help(self, mcp_id):
+        """Muestra ayuda de un MCP."""
+        safe_id = re.sub(r'[^a-zA-Z0-9_-]', '-', mcp_id.lower())
+        skills_dir = os.path.join(self.base_dir, "memory", "skills")
+        skill_path = os.path.join(skills_dir, safe_id, "SKILL.md")
+        
+        if not os.path.exists(skill_path):
+            return f"MCP '{mcp_id}' no encontrado."
+        
+        try:
+            with open(skill_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            return f"=== MCP: {safe_id} ===\n\n{content}"
+        except Exception as e:
+            return f"Error leyendo MCP '{mcp_id}': {e}"
+
     def _show_help(self):
         help_text = """
 ANTI-AGENT — COMANDOS
@@ -616,14 +776,21 @@ ANTI-AGENT — COMANDOS
     Escribi cualquier pregunta y el agente responde.
     search <query>  Fuerza una busqueda web inmediata.
 
-  reasoner    Activa/desactiva auto-critica de respuestas.
-  reflect     Analiza experiencias pasadas y genera reglas (evolución).
-  memories    Muestra un resumen de la memoria del agente (logs, patrones, engrams).
-  engra       Lista todos los engrams (conocimiento persistente) con resumen.
-  compact     Comprime la memoria de patrones.
-  forget      Borra toda la memoria.
-  status      Estado del sistema.
-  exit/quit   Apagar.
+  [MCP - Model Capability Protocol]
+    mcp list          Lista todos los MCPs instalados
+    mcp install <id> Instala un nuevo MCP
+    mcp remove <id>  Remueve un MCP instalado
+    mcp help <id>    Muestra ayuda de un MCP
+
+  [Sistema]
+    reasoner    Activa/desactiva auto-critica de respuestas.
+    reflect     Analiza experiencias pasadas y genera reglas (evolución).
+    memories    Muestra un resumen de la memoria del agente (logs, patrones, engrams).
+    engra       Lista todos los engrams (conocimiento persistente) con resumen.
+    compact     Comprime la memoria de patrones.
+    forget      Borra toda la memoria.
+    status      Estado del sistema.
+    exit/quit   Apagar.
 """
         print(f"{Colors.CYAN}{help_text}{Colors.END}")
         return help_text

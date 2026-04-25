@@ -6,6 +6,52 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+# --- MCP Tool Registry (v1.0) ---
+# Tools available via MCP protocol
+MCP_TOOLS = {
+    "duckduckgo_search": {
+        "description": "Search the web using DuckDuckGo or SearxNG",
+        "category": "search",
+    },
+    "fetch_url_text": {
+        "description": "Fetch and extract clean text content from a URL",
+        "category": "fetch",
+    },
+    "write_file": {
+        "description": "Write content to a file in the workspace",
+        "category": "file",
+    },
+    "read_file": {
+        "description": "Read content from a file in the workspace",
+        "category": "file",
+    },
+    "run_local_command": {
+        "description": "Execute a shell command locally",
+        "category": "system",
+    },
+    "autonomous_research": {
+        "description": "Search and automatically fetch top results in parallel",
+        "category": "research",
+    },
+}
+
+
+def is_mcp_tool(tool_name: str) -> bool:
+    """
+    Check if a tool name is registered as an MCP tool.
+    Returns True if the tool should be invoked via MCP protocol.
+    """
+    if not tool_name:
+        return False
+    return tool_name in MCP_TOOLS
+
+
+def get_tool_category(tool_name: str) -> str:
+    """Get the category of a tool for routing decisions."""
+    tool = MCP_TOOLS.get(tool_name, {})
+    return tool.get("category", "unknown")
+
+
 class Brain:
     def __init__(self, base_url="http://127.0.0.1:1234/v1"):
         self.base_url = base_url
@@ -42,6 +88,10 @@ class Brain:
             "temperature": temperature,
             "stream": False
         }
+        
+        import json
+        payload_size = len(json.dumps(payload))
+        print(f"[*] Payload size: {payload_size} bytes")
         
         last_error = None
         for attempt in range(self.max_retries):

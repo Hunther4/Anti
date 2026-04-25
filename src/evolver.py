@@ -172,6 +172,7 @@ class SkillEvolver:
                     
                     if similarity > 0.5: # Umbral de duplicidad
                         return True, old_data.get("topic")
+            except: continue
         return False, None
 
     async def extract_engrams(self, logs: List[Dict]) -> List[Dict]:

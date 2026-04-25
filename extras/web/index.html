@@ -40,6 +40,28 @@
             <ul id="lectura-list" class="list">
                 <li style="color:var(--text-secondary);font-size:12px;padding:8px">Sin documentos</li>
             </ul>
+            
+            <h2 class="mt">🔌 MCP Servers</h2>
+            <div id="mcp-list" class="list">
+                <li style="color:var(--text-secondary);font-size:12px;padding:8px">Sin servers MCP</li>
+            </div>
+            <button id="add-mcp-btn" class="secondary-btn" style="margin-top:8px;width:100%">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><path d="M12 5v14M5 12h14"/></svg>
+                Agregar MCP
+            </button>
+            
+            <!-- Modal para agregar MCP -->
+            <div id="mcp-modal" class="modal hidden">
+                <div class="modal-content glass">
+                    <h3>Agregar Server MCP</h3>
+                    <input type="text" id="mcp-url-input" placeholder="URL del server (e.g. http://localhost:3000)" />
+                    <input type="text" id="mcp-name-input" placeholder="Nombre (opcional)" />
+                    <div class="modal-actions">
+                        <button id="mcp-cancel-btn" class="secondary-btn">Cancelar</button>
+                        <button id="mcp-confirm-btn" class="primary-btn">Agregar</button>
+                    </div>
+                </div>
+            </div>
         </aside>
 
         <!-- Panel Central: Chat -->

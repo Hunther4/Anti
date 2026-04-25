@@ -116,7 +116,7 @@ Each Engram is stored with metadata including timestamp, context relevance score
 
 ---
 
-## 🔐 API Keys Configuration
+## 🔌 API Keys Configuration
 
 API keys are only required for cloud providers (OpenAI, Gemini). Local providers (LM Studio, Ollama) work without any keys.
 
@@ -126,6 +126,88 @@ API keys are only required for cloud providers (OpenAI, Gemini). Local providers
 chmod +x setup-keys.sh
 ./setup-keys.sh
 ```
+
+### Manual Setup
+
+```bash
+export OPENAI_API_KEY=sk-your-key-here
+export GEMINI_API_KEY=your-gemini-key
+```
+
+---
+
+## 🔌 MCP Protocol (Model Context Protocol)
+
+Anti supports the MCP standard for tool invocation via JSON-RPC 2.0. This enables integration with external AI clients and MCP-compatible tools.
+
+### MCP Server Usage
+
+Start the MCP server in standalone mode:
+
+```bash
+python src/mcp_server.py
+```
+
+The server reads JSON-RPC requests from stdin and writes responses to stdout.
+
+### MCP Protocol Methods
+
+| Method | Description |
+|:-------|:-----------|
+| `initialize` | Protocol handshake |
+| `tools/list` | List available tools |
+| `tools/call` | Execute a tool |
+
+### Available MCP Tools
+
+| Tool | Description |
+|:-----|:-----------|
+| `duckduckgo_search` | Search the web (SearxNG/DuckDuckGo) |
+| `fetch_url_text` | Fetch and clean URL content |
+| `write_file` | Write to workspace |
+| `read_file` | Read from workspace |
+| `run_local_command` | Execute shell command |
+
+### JSON-RPC Examples
+
+**Initialize:**
+
+```json
+{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2024-11-05"}}
+```
+
+**List tools:**
+
+```json
+{"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
+```
+
+**Call tool:**
+
+```json
+{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "duckduckgo_search", "arguments": {"query": "AI agents"}}}
+```
+
+### Integration with Anti Brain
+
+Anti's Brain class (`src/brain.py`) includes MCP tool detection:
+
+```python
+from src.brain import is_mcp_tool, get_tool_category, MCP_TOOLS
+
+# Check if a tool is MCP-compatible
+if is_mcp_tool("duckduckgo_search"):
+    category = get_tool_category("duckduckgo_search")
+    # category = "search"
+```
+
+### Running Tests
+
+```bash
+python test_mcp_server.py
+```
+
+This runs the full MCP protocol test suite (10 tests).
 
 ### Manual Setup
 
@@ -397,6 +479,81 @@ chmod +x setup-keys.sh
 export OPENAI_API_KEY=sk-tu-key-aqui
 export GEMINI_API_KEY=tu-key-de-gemini
 ```
+
+---
+
+## 🔌 Protocolo MCP (Model Context Protocol)
+
+Anti soporta el estándar MCP para invocación de herramientas vía JSON-RPC 2.0. Esto habilita la integración con clientes AI externos y herramientas compatibles con MCP.
+
+### Uso del Servidor MCP
+
+Iniciar el servidor MCP en modo standalone:
+
+```bash
+python src/mcp_server.py
+```
+
+El servidor lee requests JSON-RPC desde stdin y escribe respuestas a stdout.
+
+### Métodos del Protocolo MCP
+
+| Método | Descripción |
+|:-------|:-----------|
+| `initialize` | Handshake del protocolo |
+| `tools/list` | Listar herramientas disponibles |
+| `tools/call` | Ejecutar una herramienta |
+
+### Herramientas MCP Disponibles
+
+| Herramienta | Descripción |
+|:-----------|:-----------|
+| `duckduckgo_search` | Buscar en la web (SearxNG/DuckDuckGo) |
+| `fetch_url_text` | Obtener y limpiar contenido de URL |
+| `write_file` | Escribir en el workspace |
+| `read_file` | Leer del workspace |
+| `run_local_command` | Ejecutar comando de shell |
+
+### Ejemplos de JSON-RPC
+
+**Initialize:**
+
+```json
+{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2024-11-05"}}
+```
+
+**List tools:**
+
+```json
+{"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
+```
+
+**Call tool:**
+
+```json
+{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "duckduckgo_search", "arguments": {"query": "AI agents"}}}
+```
+
+### Integración con Anti Brain
+
+La clase Brain de Anti (`src/brain.py`) incluye detección de tools MCP:
+
+```python
+from src.brain import is_mcp_tool, get_tool_category, MCP_TOOLS
+
+# Chequear si una herramienta es MCP-compatible
+if is_mcp_tool("duckduckgo_search"):
+    categoria = get_tool_category("duckduckgo_search")
+    # categoria = "search"
+```
+
+### Ejecutar Tests
+
+```bash
+python test_mcp_server.py
+```
+
+Esto ejecuta la suite completa de tests del protocolo MCP (10 tests).
 
 ---
 

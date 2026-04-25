@@ -9,6 +9,23 @@ from core.agent import AntiAgent
 agent = AntiAgent()
 active_jobs = {}
 
+# MCP servers storage
+MCP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "memory", "mcp_servers.json")
+
+def load_mcps():
+    if os.path.exists(MCP_FILE):
+        try:
+            with open(MCP_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return []
+    return []
+
+def save_mcps(mcps):
+    os.makedirs(os.path.dirname(MCP_FILE), exist_ok=True)
+    with open(MCP_FILE, "w") as f:
+        json.dump(mcps, f, indent=2)
+
 
 def background_agent_task(job_id, message, image_data):
     """Ejecuta el agente en segundo plano y guarda el resultado en active_jobs."""
@@ -124,6 +141,24 @@ class APIHandler(SimpleHTTPRequestHandler):
                 pass
             return
 
+        # --- MCP Endpoints ---
+        elif path_base == '/api/mcp':
+            mcps = load_mcps()
+            # Check connection status for each MCP
+            for mcp in mcps:
+                try:
+                    import urllib.request
+                    req = urllib.request.Request(mcp.get("url", "") + "/health", method="GET", timeout=3)
+                    urllib.request.urlopen(req)
+                    mcp["status"] = "connected"
+                except:
+                    mcp["status"] = "disconnected"
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"mcps": mcps}).encode('utf-8'))
+            return
+
         return super().do_GET()
 
     def do_POST(self):
@@ -159,6 +194,63 @@ class APIHandler(SimpleHTTPRequestHandler):
                 self.send_response(400)
                 self.end_headers()
                 self.wfile.write(b"Invalid JSON")
+            return
+
+        elif path_base == '/api/mcp/add':
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+            try:
+                data = json.loads(post_data.decode('utf-8'))
+                url = data.get('url', '')
+                name = data.get('name', '')
+                if not url:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(b"URL required")
+                    return
+                
+                mcps = load_mcps()
+                mcp_id = str(uuid.uuid4())[:8]
+                mcps.append({
+                    "id": mcp_id,
+                    "url": url,
+                    "name": name or f"mcp-{mcp_id}",
+                    "status": "disconnected"
+                })
+                save_mcps(mcps)
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": True, "id": mcp_id}).encode('utf-8'))
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(str(e).encode())
+            return
+
+        elif path_base == '/api/mcp/remove':
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+            try:
+                data = json.loads(post_data.decode('utf-8'))
+                mcp_id = data.get('id', '')
+                if not mcp_id:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(b"ID required")
+                    return
+                
+                mcps = load_mcps()
+                mcps = [m for m in mcps if m.get('id') != mcp_id]
+                save_mcps(mcps)
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": True}).encode('utf-8'))
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(str(e).encode())
             return
 
         elif path_base == '/api/upload-lectura':
