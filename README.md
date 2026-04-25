@@ -1,5 +1,6 @@
 # Anti — Autonomous Agent with Persistent Memory 🇺🇸
-# Anti — Agente Autónomo con Memoria Persistente 🇪🇸
+
+                            ↓ 🇪🇸
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
@@ -273,7 +274,6 @@ Built from the Maule region for the world.
 ---
 
 # Anti — Agente Autónomo con Memoria Persistente 🇪🇸
-# Anti — Autonomous Agent with Persistent Memory 🇺🇸
 
 ---
 
