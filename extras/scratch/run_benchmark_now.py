@@ -6,7 +6,7 @@ import sys
 # If running from Anti/, then current dir is fine
 # If running from scratch/, we need one level up
 script_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(script_dir) # This should be .../proyec/Anti
+project_root = os.path.dirname(os.path.dirname(script_dir)) # This should be .../proyec/Anti
 sys.path.append(project_root)
 
 from src.agent import AntiAgent

@@ -30,7 +30,7 @@ class SentinelGauntlet:
             {
                 "id": "Test 2",
                 "name": "Integridad Sentinel (Context Management)",
-                "prompt": f"Analiza el archivo '{os.path.join(self.agent.base_dir, 'core', 'agent.py')}' y genera una documentación detallada de cada método. Luego, basándote en eso, sugiere 3 optimizaciones de rendimiento.",
+                "prompt": f"Analiza el archivo '{os.path.join(self.agent.base_dir, 'src', 'agent.py')}' y genera una documentación detallada de cada método. Luego, basándote en eso, sugiere 3 optimizaciones de rendimiento.",
             },
             {
                 "id": "Test 3",
