@@ -1,5 +1,5 @@
-# Anti — Autonomous Agent with Persistent Memory
-# Anti — Agente Autónomo con Memoria Persistente
+# Anti — Autonomous Agent with Persistent Memory 🇺🇸
+# Anti — Agente Autónomo con Memoria Persistente 🇪🇸
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
@@ -18,17 +18,6 @@ pip install requests aiohttp
 python main.py
 ```
 
-## ⚡ Inicio Rápido
-
-```bash
-git clone https://github.com/Hunther4/Anti.git
-cd Anti
-python -m venv venv
-source venv/bin/activate
-pip install requests aiohttp
-python main.py
-```
-
 ---
 
 ## 🔌 Supported Providers
@@ -37,10 +26,10 @@ Anti automatically detects which provider you have running. No configuration nee
 
 | Provider | Port | API Key | Auto-detect |
 |:---------|:-------|:-------|:----------:|
-| LM Studio | 1234 | ❌ | ✅ |
-| Ollama | 11434 | ❌ | ✅ |
-| OpenAI | cloud | ✅ | ❌ |
-| Gemini | cloud | ✅ | ❌ |
+| LM Studio | 1234 | No | Yes |
+| Ollama | 11434 | No | Yes |
+| OpenAI | cloud | Yes | No |
+| Gemini | cloud | Yes | No |
 
 Set `"provider": "auto"` in config.json for automatic detection, or specify a provider directly.
 
@@ -48,60 +37,59 @@ Set `"provider": "auto"` in config.json for automatic detection, or specify a pr
 
 For tool-heavy workflows involving JSON output, function calling, or structured tool execution, we strongly recommend using models from the **Llama 3.3 8B lineage** (such as Dolphin or Abliterated variants) or **Qwen 2.5 Coder**. These models exhibit significantly lower rates of ethical rejections and false positives when tasked with tool invocation, making them ideal for autonomous agent workflows where reliability is critical.
 
-## 🔌 Proveedores Soportados
-
-Anti detecta automáticamente qué proveedor tenés ejecutando. No necesitás configuración para proveedores locales.
-
-| Proveedor | Puerto | API Key | Auto-detect |
-|:---------|:-------|:-------|:----------:|
-| LM Studio | 1234 | ❌ | ✅ |
-| Ollama | 11434 | ❌ | ✅ |
-| OpenAI | cloud | ✅ | ❌ |
-| Gemini | cloud | ✅ | ❌ |
-
-Poné `"provider": "auto"` en config.json para detección automática, o especificá un proveedor directamente.
-
-### Recomendación de Rendimiento por Proveedor
-
-Para flujos de trabajo intensivos en herramientas que involucran salida JSON, llamadas a funciones o ejecución estructurada de herramientas, recomendamos firmemente usar modelos de la **rama Llama 3.3 8B** (como variantes Dolphin o Abliterated) o **Qwen 2.5 Coder**. Estos modelos exhiben tasas significativamente más bajas de rechazos éticos y falsos positivos cuando se les asigna invocación de herramientas, haciéndolos ideales para flujos de trabajo de agentes autónomos donde la confiabilidad es crítica.
-
 ---
 
-## 🔐 API Keys Configuration
+## 🛠️ CLI Commands
 
-API keys are only required for cloud providers (OpenAI, Gemini). Local providers (LM Studio, Ollama) work without any keys.
+| Command | Description |
+|:--------|:-----------|
+| help | Show all available commands |
+| status | Display system status, connection info, and integrity matrix |
+| reflect | Force a Dual Evolution cycle. Extract new Engrams from recent logs and refine Skills |
+| consolidate | Initiate autonomous maintenance. Purge obsolete data and merge redundant Engram and Skill clusters using LLM |
+| memories / engra | Reports on long-term memory retention status |
+| search <query> | Force a web search |
+| benchmark | Run the Sentinel Gauntlet — 5-phase stress test measuring TPS, latency, and model resilience |
+| reasoner | Toggle auto-critique mode (improves accuracy at the cost of higher latency) |
+| admin move <src> <dst> | Raw workspace file move operation |
+| admin delete <path> | Raw workspace file deletion |
+| exit | Exit the agent |
 
-### Interactive Setup
+### Extended Command Reference
 
-```bash
-chmod +x setup-keys.sh
-./setup-keys.sh
-```
+#### reflect — Dual Evolution Cycle
+Forces immediate execution of Anti's self-evolution system:
+- Extracts new knowledge Engrams from recent conversation logs
+- Analyzes success/failure patterns
+- Generates refined behavioral Skills
+- Updates the internal skill hierarchy
 
-### Manual Setup
+#### consolidate — Autonomous Maintenance
+Initiates full system maintenance:
+- Identifies and purges obsolete data
+- Merges semantically redundant Engram clusters
+- Merges duplicate or overlapping Skill definitions
+- Optimizes storage using LLM-guided deduplication
 
-```bash
-export OPENAI_API_KEY=sk-your-key-here
-export GEMINI_API_KEY=your-gemini-key
-```
+#### reasoner — Auto-Critique Mode
+Toggles the internal self-critique loop:
+- **ON**: Model generates response → Elite Critic analyzes → Refined output delivered
+- **OFF**: Direct response delivery
+- Trade-off: Higher quality vs. lower latency
 
-## 🔐 Configuración de API Keys
+#### benchmark — Sentinel Gauntlet
+Executes the 5-phase stress test:
+1. **Brute Force**: TPS and latency measurement via complex code generation
+2. **Sentinel Integrity**: Context management evaluation
+3. **Superior Cognition**: Philosophical/technical reasoning evaluation
+4. **Agency**: Tool execution success (SEARCH/READ/WRITE)
+5. **Persona Check**: Identity fidelity verification
 
-Las API keys solo son necesarias para proveedores en la nube (OpenAI, Gemini). Los proveedores locales (LM Studio, Ollama) funcionan sin ninguna key.
-
-### Configuración Interactiva
-
-```bash
-chmod +x setup-keys.sh
-./setup-keys.sh
-```
-
-### Configuración Manual
-
-```bash
-export OPENAI_API_KEY=sk-tu-key-aqui
-export GEMINI_API_KEY=tu-key-de-gemini
-```
+#### admin — Workspace Management
+Raw file operations for advanced users:
+- `admin move`: Move files within workspace
+- `admin delete`: Delete files from workspace
+**Warning**: These operations bypass safety checks. Use with caution.
 
 ---
 
@@ -125,81 +113,203 @@ Anti's memory architecture is designed around the concept of "Engrams" — persi
 
 Each Engram is stored with metadata including timestamp, context relevance score, and usage frequency, enabling intelligent retrieval and priority-based management.
 
-## 🧠 Sistema de Memoria
+---
 
-Una de las características más poderosas de Anti es su sistema de memoria persistente que mantiene contexto entre sesiones.
+## 🔐 API Keys Configuration
 
-- **Engrams** — Conocimiento factual que el agente aprende y recuerda
-- **Patrones** — Lecciones aprendidas de experiencias pasadas
-- **Skills** — Reglas de comportamiento evolucionadas automáticamente
-- **Logs** — Historial completo de conversaciones con seguimiento de éxito/fallo
+API keys are only required for cloud providers (OpenAI, Gemini). Local providers (LM Studio, Ollama) work without any keys.
 
-### Arquitectura del Sistema de Engrams
+### Interactive Setup
 
-La arquitectura de memoria de Anti está diseñada alrededor del concepto de "Engrams" — unidades de memoria persistente que capturan:
+```bash
+chmod +x setup-keys.sh
+./setup-keys.sh
+```
 
-1. **Engrams Factual**: Conocimiento concreto, hechos y datos de configuración descubiertos durante las interacciones
-2. **Engrams de Patrones**: Patrones conductuales recurrentes y estrategias exitosas que pueden ser reutilizadas
-3. **Engrams de Skills**: Comportamientos del sistema evolucionados generados a través del ciclo reflect/consolidate
-4. **Engrams de Logs**: Historiales de interacción completos con métricas de éxito/fallo para mejora continua
+### Manual Setup
 
-Cada Engram se almacena con metadatos incluyendo marca de tiempo, puntuación de relevancia de contexto y frecuencia de uso, permitiendo recuperación inteligente y gestión basada en prioridades.
+```bash
+export OPENAI_API_KEY=sk-your-key-here
+export GEMINI_API_KEY=your-gemini-key
+```
 
 ---
 
-## 🛠️ Available Commands
+## 📂 Project Structure
 
-| Command | Description |
-|:--------|:-----------|
-| help | Show all available commands |
-| status | Display system status, connection info, and integrity matrix |
-| reflect | Force a Dual Evolution cycle. Extract new Engrams from recent logs and refine Skills |
-| consolidate | Initiate autonomous maintenance. Purge obsolete data and merge redundant Engram and Skill clusters using LLM |
-| memories / engra | Reports on long-term memory retention status |
-| search \<query\> | Force a web search |
-| benchmark | Run the Sentinel Gauntlet — 5-phase stress test measuring TPS, latency, and model resilience |
-| reasoner | Toggle auto-critique mode (improves accuracy at the cost of higher latency) |
-| admin move \<src\> \<dst\> | Raw workspace file move operation |
-| admin delete \<path\> | Raw workspace file deletion |
-| exit | Exit the agent |
+```
+Anti/
+├── src/                    # Core source code
+│   ├── agent.py           # Main CLI entry point
+│   ├── brain.py          # Chat logic and LLM communication
+│   ├── memory.py         # Memory management
+│   ├── tools.py          # Built-in tools
+│   ├── evolver.py        # Skill evolution system
+│   ├── compactor.py      # Memory compaction
+│   ├── consolidator.py   # Autonomous maintenance
+│   ├── scorer.py         # Performance scoring
+│   ├── benchmark.py     # Sentinel Gauntlet runner
+│   ├── providers/       # Multi-provider support
+│   │   ├── lmstudio.py
+│   │   ├── ollama.py
+│   │   ├── openai.py
+│   │   └── gemini.py
+│   └── ...
+├── memory/                 # Persistent memory
+│   ├── skills/          # Behavior skills
+│   ├── engrams/        # Factual knowledge
+│   └── logs            # Conversation history
+├── workspace/             # Work files directory
+├── docs/                  # Documentation
+├── lectura/              # Reference documents
+├── prompts/              # System prompts and templates
+├── config.json           # Configuration file
+├── main.py               # Entry point
+└── setup-keys.sh         # API key setup script
+```
 
-### Extended Command Reference
+---
 
-#### reflect — Dual Evolution Cycle
-Forces immediate execution of Anti's self-evolution system:
-- Extracts new knowledge Engrams from recent conversation logs
-- Analyzes success/failure patterns
-- Generates refined behavioral Skills
-- Updates the internal skill hierarchy
+## 🤝 Contributing
 
-#### consolidate — Autonomous Maintenance
-Initiates full system maintenance:
-- Identifies and purges obsolete data
-- Merges semantically redundant Engram clusters
-- Merges duplicate or overlapping Skill definitions
-- Optimizes storage using LLM-guided deduplication
+Contributions are welcome! Whether you want to add a new provider, improve the memory system, fix bugs, or add documentation — your help is appreciated.
 
-#### reasoner — Auto-Critique Mode
-Toggles the internal self-critique loop:
-- **ON**: Model generates response → Elite Critic analyzes ��� Refined output delivered
-- **OFF**: Direct response delivery
-- Trade-off: Higher quality vs. lower latency
+### How to Contribute
 
-#### benchmark — Sentinel Gauntlet
-Executes the 5-phase stress test:
-1. **Brute Force**: TPS and latency measurement via complex code generation
-2. **Sentinel Integrity**: Context management evaluation
-3. **Superior Cognition**: Philosophical/technical reasoning evaluation
-4. **Agency**: Tool execution success (SEARCH/READ/WRITE)
-5. **Persona Check**: Identity fidelity verification
+1. **Fork** the repository
+2. **Create** a feature branch: `git checkout -b feature/amazing-feature`
+3. **Make** your changes
+4. **Test** thoroughly
+5. **Commit** with a clear message: `git commit -m 'feat: add amazing feature'`
+6. **Push** to your fork: `git push origin feature/amazing-feature`
+7. **Open** a Pull Request
 
-#### admin — Workspace Management
-Raw file operations for advanced users:
-- `admin move`: Move files within workspace
-- `admin delete`: Delete files from workspace
-**Warning**: These operations bypass safety checks. Use with caution.
+Please ensure your code follows the project's coding standards and include tests for new features.
 
-## 🛠️ Comandos Disponibles
+---
+
+## 📋 Code of Conduct
+
+This project is committed to providing a welcoming and inclusive environment for everyone. We expect all participants to follow these guidelines:
+
+- **Be respectful** and inclusive to all community members
+- **Accept constructive criticism** with grace and professionalism
+- **Focus on what's best** for the community and the project
+- **Show empathy** towards other community members
+- **Use welcoming and inclusive language**
+
+Harassment, discrimination, and abusive behavior are not tolerated.
+
+---
+
+## 🔒 Security Policy
+
+If you discover a security vulnerability in this project, please report it responsibly.
+
+### Reporting a Vulnerability
+
+1. **Do NOT** open a public GitHub issue
+2. **Email** the maintainer directly with details
+3. **Provide** clear steps to reproduce the issue
+4. **Allow** reasonable time for a response
+
+We will acknowledge your report and work on a fix as quickly as possible.
+
+---
+
+## ❓ Frequently Asked Questions
+
+**Q: Do I need a GPU?**
+A: Only if using local providers (LM Studio or Ollama). Cloud providers (OpenAI, Gemini) work on any computer with internet.
+
+**Q: How do I change the model?**
+A: Set the "model" parameter in config.json, or simply load a different model in LM Studio/Ollama before starting Anti.
+
+**Q: What if no provider is running?**
+A: Anti will show a connection error. Start LM Studio or Ollama, or configure an API key for OpenAI/Gemini.
+
+**Q: Is my data secure?**
+A: Yes. Local providers never send data externally. Cloud providers use standard encryption.
+
+**Q: How does the reflect command work?**
+A: `reflect` forces a Dual Evolution cycle: it extracts new Engrams from recent logs, analyzes success/failure patterns, and generates refined behavioral Skills. Think of it as the agent's self-improvement loop.
+
+**Q: What is the Sentinel Gauntlet benchmark?**
+A: A 5-phase stress test that measures TPS (Tokens Per Second), latency, context management, tool execution success, and persona fidelity. Essential for evaluating which LLM performs best for your use case.
+
+---
+
+## 📜 License
+
+This project is licensed under the MIT License.
+
+See the [LICENSE](LICENSE) file for full details.
+
+---
+
+## 📝 Authorship
+
+**Anti** was created and is maintained by **Hunther4**.
+
+The project was designed and engineered from **Maule, Chile** — with a laser focus on local, high-performance engineering for autonomous agents. Every architectural decision prioritizes local execution, privacy-by-default, and maximum control over the AI reasoning process.
+
+This is not a generic AI wrapper. Anti is purpose-built for engineers who care about:
+- **Local execution** — No data leaves your machine
+- **Persistent memory** — True context that survives sessions
+- **Autonomous evolution** — Self-improvement through the reflect/consolidate cycle
+- **Measurable excellence** — Benchmarks, percentages, and hard metrics
+
+Built from the Maule region for the world.
+
+---
+
+## 🙏 Acknowledgments
+
+- [LM Studio](https://lmstudio.ai) — Local LLM execution
+- [Ollama](https://ollama.com) — Local LLM execution
+- [OpenAI](https://openai.com) — Cloud AI services
+- [Google Gemini](https://gemini.google.com) — Cloud AI services
+
+---
+
+# Anti — Agente Autónomo con Memoria Persistente 🇪🇸
+# Anti — Autonomous Agent with Persistent Memory 🇺🇸
+
+---
+
+## ⚡ Inicio Rápido
+
+```bash
+git clone https://github.com/Hunther4/Anti.git
+cd Anti
+python -m venv venv
+source venv/bin/activate
+pip install requests aiohttp
+python main.py
+```
+
+---
+
+## 🔌 Proveedores Soportados
+
+Anti detecta automáticamente qué proveedor tenés ejecutando. No necesitás configuración para proveedores locales.
+
+| Proveedor | Puerto | API Key | Auto-detect |
+|:---------|:-------|:-------|:----------:|
+| LM Studio | 1234 | No | Sí |
+| Ollama | 11434 | No | Sí |
+| OpenAI | cloud | Sí | No |
+| Gemini | cloud | Sí | No |
+
+Poné `"provider": "auto"` en config.json para detección automática, o especificá un proveedor directamente.
+
+### Recomendación de Rendimiento por Proveedor
+
+Para flujos de trabajo intensivos en herramientas que involucran salida JSON, llamadas a funciones o ejecución estructurada de herramientas, recomendamos firmemente usar modelos de la **rama Llama 3.3 8B** (como variantes Dolphin o Abliterated) o **Qwen 2.5 Coder**. Estos modelos exhiben tasas significativamente más bajas de rechazos éticos y falsos positivos cuando se les asigna invocación de herramientas, haciéndolos ideales para flujos de trabajo de agentes autónomos donde la confiabilidad es crítica.
+
+---
+
+## 🛠️ Comandos de CLI
 
 | Comando | Descripción |
 |:--------|:-----------|
@@ -208,11 +318,11 @@ Raw file operations for advanced users:
 | reflect | Forzar un ciclo de Evolución Dual. Extrae nuevos Engrams de los logs recientes y refina las Skills |
 | consolidate | Inicia el mantenimiento autónomo. Purga datos obsoletos y fusiona clusters de Engrams y Skills redundantes mediante el LLM |
 | memories / engra | Reportes del estado de retención de la memoria a largo plazo |
-| search \<consulta\> | Forzar una búsqueda web |
+| search <consulta> | Forzar una búsqueda web |
 | benchmark | Ejecutar el Sentinel Gauntlet — test de estrés de 5 fases para medir TPS, latencia y resiliencia del modelo |
 | reasoner | Activar/Desactivar el modo de autocrítica (mejora la precisión a costa de mayor latencia) |
-| admin move \<origen\> \<destino\> | Operación cruda de movimiento de archivos en el workspace |
-| admin delete \<ruta\> | Eliminación cruda de archivos del workspace |
+| admin move <origen> <destino> | Operación cruda de movimiento de archivos en el workspace |
+| admin delete <ruta> | Eliminación cruda de archivos del workspace |
 | exit | Salir del agente |
 
 ### Referencia Extendida de Comandos
@@ -253,125 +363,47 @@ Operaciones crudas de archivos para usuarios avanzados:
 
 ---
 
-## 🧩 Modular Identity — Anti vs Neu
+## 🧠 Sistema de Memoria
 
-Anti implements a dual-persona architecture that adapts its identity based on the task context:
+Una de las características más poderosas de Anti es su sistema de memoria persistente que mantiene contexto entre sesiones.
 
-### Anti — The Supreme Analyst (El Analista Supremo)
+- **Engrams** — Conocimiento factual que el agente aprende y recuerda
+- **Patrones** — Lecciones aprendidas de experiencias pasadas
+- **Skills** — Reglas de comportamiento evolucionadas automáticamente
+- **Logs** — Historial completo de conversaciones con seguimiento de éxito/fallo
 
-**Profile**: High-density technical authority
-- **Core Character**: The Senior Architect — 15+ years experience, GDE & MVP
-- **Philosophy**: CONCEPTS > CODE, SOLID FOUNDATIONS, AGAINST IMMEDIACY
-- **Behavior**: Demands hard data, benchmarks, percentages, and measurable metrics
-- **Output Style**: Comprehensive analysis, vulnerability assessments, architecture reports
-- **Tone**: Passionate and direct, from a place of caring about excellence
-- **Specialization**: Security audits, architectural design decisions, in-depth code analysis, vulnerability identification
+### Arquitectura del Sistema de Engrams
 
-Anti actively despises generalities and hand-waving. Every claim must be backed by:
-- Quantitative benchmarks
-- Percentage-based performance metrics
-- Concrete code examples
-- Traceable evidence
+La arquitectura de memoria de Anti está diseñada alrededor del concepto de "Engrams" — unidades de memoria persistente que capturan:
 
-### Neu — The Executor/Tutor (El Ejecutor/Tutor)
+1. **Engrams Factual**: Conocimiento concreto, hechos y datos de configuración descubiertos durante las interacciones
+2. **Engrams de Patrones**: Patrones conductuales recurrentes y estrategias exitosas que pueden ser reutilizadas
+3. **Engrams de Skills**: Comportamientos del sistema evolucionados generados a través del ciclo reflect/consolidate
+4. **Engrams de Logs**: Historiales de interacción completos con métricas de éxito/fallo para mejora continua
 
-**Profile**: Younger brother, action-oriented pragmatist
-- **Core Character**: The Hands-On Developer — execution-focused, clean-code advocate
-- **Philosophy**: Get things done, refactor early and often, minimal friction
-- **Behavior**: Direct code execution, terminal efficiency, rapid prototyping
-- **Output Style**: Clean refactoring, actionable solutions, focused changes
-- **Tone**: Practical, concise, solution-oriented
-- **Specialization**: Daily code refactoring, quick fixes, terminal-based execution, straightforward improvements
-
-Neu focuses on making things work efficiently with minimal overhead. Less analysis, more action.
-
-### When Each Persona Activates
-
-| Context | Persona | Reason |
-|:--------|:--------|:-------|
-| Security audit, architecture design | **Anti** | Requires deep analysis and measurable metrics |
-| Daily refactoring, quick fixes | **Neu** | Requires rapid execution, not deep analysis |
-| Vulnerability assessment | **Anti** | Demands benchmarks and percentages |
-| Terminal-based task | **Neu** | Focuses on execution speed |
-| Teaching a concept | **Anti** | Detailed explanation with foundations |
-| Quick implementation | **Neu** | Direct code, no unnecessary explanation |
-
-## 🧩 Identidad Modular — Anti vs Neu
-
-Anti implementa una arquitectura de doble personalidad que adapta su identidad según el contexto de la tarea:
-
-### Anti — El Analista Supremo
-
-**Perfil**: Autoridad técnica de alta densidad
-- **Carácter Central**: El Arquitecto Senior — 15+ años de experiencia, GDE & MVP
-- **Filosofía**: CONCEPTOS > CÓDIGO, FUNDAMENTOS SÓLIDOS, CONTRA LA INMEDIATEZ
-- **Comportamiento**: Exige datos duros, benchmarks, porcentajes y métricas medibles
-- **Estilo de Output**: Análisis comprehensivo, informes de arquitectura, evaluaciones de vulnerabilidades
-- **Tono**: Passionado y directo, desde un lugar de cuidado por la excelencia
-- **Especialización**: Auditorías de seguridad, decisiones de diseño arquitectónico, análisis profundo de código, identificación de vulnerabilidades
-
-Anti desprecia activamente las generalidades y el bla-bla. Cada afirmación debe estar respaldada por:
-- Benchmarks cuantitativos
-- Métricas de rendimiento basadas en porcentajes
-- Ejemplos de código concretos
-- Evidencia rastreable
-
-### Neu — El Ejecutor/Tutor
-
-**Perfil**: Hermano menor, pragmático orientado a la acción
-- **Carácter Central**: El Desarrollador Práctico — centrado en ejecución, defensor del código limpio
-- **Filosofía**: Hacer las cosas, refactorizar temprano y a menudo, fricción mínima
-- **Comportamiento**: Ejecución de código directa, eficiencia en terminal, prototipado rápido
-- **Estilo de Output**: Refactorización limpia, soluciones accionables, cambios enfocados
-- **Tono**: Práctico, conciso, orientado a soluciones
-- **Especialización**: Refactorización diaria del código, fixes rápidos, ejecución basada en terminal, mejoras directas
-
-Neu se enfoca en hacer que las cosas funcionen eficientemente con mínimo overhead. Menos análisis, más acción.
-
-### Cuándo Se Activa Cada Personalidad
-
-| Contexto | Personalidad | Razón |
-|:---------|:------------|:------|
-| Auditoría de seguridad, diseño arquitectónico | **Anti** | Requiere análisis profundo y métricas medibles |
-| Refactorización diaria, fixes rápidos | **Neu** | Requiere ejecución rápida, no análisis profundo |
-| Evaluación de vulnerabilidades | **Anti** | Exige benchmarks y porcentajes |
-| Tarea basada en terminal | **Neu** | Se enfoca en velocidad de ejecución |
-| Enseñar un concepto | **Anti** | Explicación detallada con fundamentos |
-| Implementación rápida | **Neu** | Código directo, sin explicación innecesaria |
+Cada Engram se almacena con metadatos incluyendo marca de tiempo, puntuación de relevancia de contexto y frecuencia de uso, permitiendo recuperación inteligente y gestión basada en prioridades.
 
 ---
 
-## 📂 Project Structure
+## 🔐 Configuración de API Keys
 
+Las API keys solo son necesarias para proveedores en la nube (OpenAI, Gemini). Los proveedores locales (LM Studio, Ollama) funcionan sin ninguna key.
+
+### Configuración Interactiva
+
+```bash
+chmod +x setup-keys.sh
+./setup-keys.sh
 ```
-Anti/
-├── src/                    # Core source code
-│   ├── agent.py           # Main CLI entry point
-│   ├── brain.py          # Chat logic and LLM communication
-│   ├── memory.py         # Memory management
-│   ├── tools.py          # Built-in tools
-│   ├── evolver.py        # Skill evolution system
-│   ├── compactor.py      # Memory compaction
-│   ├── consolidator.py   # Autonomous maintenance
-│   ├── scorer.py         # Performance scoring
-│   ├── benchmark.py     # Sentinel Gauntlet runner
-│   ├── providers/       # Multi-provider support
-│   │   ├── lmstudio.py
-│   │   ├── ollama.py
-│   │   ├── openai.py
-│   │   └── gemini.py
-│   └── ...
-├── memory/                 # Persistent memory
-│   ├── skills/          # Behavior skills
-│   ├── engrams/        # Factual knowledge
-│   └── logs            # Conversation history
-├── workspace/             # Work files directory
-├── docs/                  # Documentation
-├── lectura/              # Reference documents
-├── config.json           # Configuration file
-├── main.py               # Entry point
-└── setup-keys.sh         # API key setup script
+
+### Configuración Manual
+
+```bash
+export OPENAI_API_KEY=sk-tu-key-aqui
+export GEMINI_API_KEY=tu-key-de-gemini
 ```
+
+---
 
 ## 📂 Estructura del Proyecto
 
@@ -400,28 +432,13 @@ Anti/
 ├── workspace/             # Directorio de archivos de trabajo
 ├── docs/                  # Documentación
 ├── lectura/               # Documentos de referencia
+├── prompts/              # Prompts del sistema y plantillas
 ├── config.json           # Archivo de configuración
 ├── main.py               # Punto de entrada
 └── setup-keys.sh         # Script de configuración de API keys
 ```
 
 ---
-
-## 🤝 Contributing
-
-Contributions are welcome! Whether you want to add a new provider, improve the memory system, fix bugs, or add documentation — your help is appreciated.
-
-### How to Contribute
-
-1. **Fork** the repository
-2. **Create** a feature branch: `git checkout -b feature/amazing-feature`
-3. **Make** your changes
-4. **Test** thoroughly
-5. **Commit** with a clear message: `git commit -m 'feat: add amazing feature'`
-6. **Push** to your fork: `git push origin feature/amazing-feature`
-7. **Open** a Pull Request
-
-Please ensure your code follows the project's coding standards and include tests for new features.
 
 ## 🤝 Contribuir
 
@@ -441,18 +458,6 @@ Por favor asegurate de que tu código siga los estándares de codificación del 
 
 ---
 
-## 📋 Code of Conduct
-
-This project is committed to providing a welcoming and inclusive environment for everyone. We expect all participants to follow these guidelines:
-
-- **Be respectful** and inclusive to all community members
-- **Accept constructive criticism** with grace and professionalism
-- **Focus on what's best** for the community and the project
-- **Show empathy** towards other community members
-- **Use welcoming and inclusive language**
-
-Harassment, discrimination, and abusive behavior are not tolerated.
-
 ## 📋 Código de Conducta
 
 Este proyecto está comprometido a proporcionar un ambiente acogedor e inclusivo para todos. Esperamos que todos los participantes sigan estas pautas:
@@ -466,19 +471,6 @@ Este proyecto está comprometido a proporcionar un ambiente acogedor e inclusivo
 El acoso, la discriminación y el comportamiento abusivo no serán tolerados.
 
 ---
-
-## 🔒 Security Policy
-
-If you discover a security vulnerability in this project, please report it responsibly.
-
-### Reporting a Vulnerability
-
-1. **Do NOT** open a public GitHub issue
-2. **Email** the maintainer directly with details
-3. **Provide** clear steps to reproduce the issue
-4. **Allow** reasonable time for a response
-
-We will acknowledge your report and work on a fix as quickly as possible.
 
 ## 🔒 Política de Seguridad
 
@@ -495,29 +487,6 @@ Reconoceremos tu reporte y trabajaremos en una solución lo más rápido posible
 
 ---
 
-## ❓ Frequently Asked Questions
-
-**Q: Do I need a GPU?**
-A: Only if using local providers (LM Studio or Ollama). Cloud providers (OpenAI, Gemini) work on any computer with internet.
-
-**Q: How do I change the model?**
-A: Set the "model" parameter in config.json, or simply load a different model in LM Studio/Ollama before starting Anti.
-
-**Q: What if no provider is running?**
-A: Anti will show a connection error. Start LM Studio or Ollama, or configure an API key for OpenAI/Gemini.
-
-**Q: Is my data secure?**
-A: Yes. Local providers never send data externally. Cloud providers use standard encryption.
-
-**Q: What's the difference between Anti and Neu?**
-A: Anti is the "Supreme Analyst" — demands benchmarks, percentages, and hard data for architectural decisions. Neu is the "Executor/Tutor" — focuses on quick code execution and daily refactoring. See the Modular Identity section for details.
-
-**Q: How does the reflect command work?**
-A: `reflect` forces a Dual Evolution cycle: it extracts new Engrams from recent logs, analyzes success/failure patterns, and generates refined behavioral Skills. Think of it as the agent's self-improvement loop.
-
-**Q: What is the Sentinel Gauntlet benchmark?**
-A: A 5-phase stress test that measures TPS (Tokens Per Second), latency, context management, tool execution success, and persona fidelity. Essential for evaluating which LLM performs best for your use case.
-
 ## ❓ Preguntas Frecuentes
 
 **P: ¿Necesito GPU?**
@@ -532,9 +501,6 @@ R: Anti mostrará un error de conexión. Iniciá LM Studio u Ollama, o configur�
 **P: ¿Mis datos están seguros?**
 R: Sí. Los proveedores locales nunca envían datos externamente. Los proveedores en la nube usan encriptación estándar.
 
-**P: ¿Cuál es la diferencia entre Anti y Neu?**
-R: Anti es el "Analista Supremo" — exige benchmarks, porcentajes y datos duros para decisiones arquitectónicas. Neu es el "Ejecutor/Tutor" — se enfoca en ejecución rápida de código y refactorización diaria. Ver la sección de Identidad Modular para detalles.
-
 **P: ¿Cómo funciona el comando reflect?**
 R: `reflect` fuerza un ciclo de Evolución Dual: extrae nuevos Engrams de los logs recientes, analiza patrones de éxito/fallo y genera Skills conductuales refinadas. Pensalo como el loop de auto-mejora del agente.
 
@@ -542,12 +508,6 @@ R: `reflect` fuerza un ciclo de Evolución Dual: extrae nuevos Engrams de los lo
 R: Un test de estrés de 5 fases que mide TPS (Tokens Per Second), latencia, gestión de contexto, éxito de ejecución de herramientas y fidelidad de personalidad. Esencial para evaluar qué LLM funciona mejor para tu caso de uso.
 
 ---
-
-## 📜 License
-
-This project is licensed under the MIT License.
-
-See the [LICENSE](LICENSE) file for full details.
 
 ## 📜 Licencia
 
@@ -557,25 +517,11 @@ Ver el archivo [LICENSE](LICENSE) para detalles completos.
 
 ---
 
-## 📝 Authorship
-
-**Anti** was created and is maintained by **Hunther4**.
-
-The project was designed and engineered from **Maule, Chile** — with a laser focus on local, high-performance engineering for autonomous agents. Every architectural decision prioritizes local execution, privacy-by-default, and maximum control over the AI reasoning process.
-
-This is not a generic AI wrapper. Anti is purpose-built for engineers who care about:
-- **Local execution** — No data leaves your machine
-- **Persistent memory** — True context that survives sessions
-- **Autonomous evolution** — Self-improvement through the reflect/consolidate cycle
-- **Measurable excellence** — Benchmarks, percentages, and hard metrics
-
-Built from the Maule region for the world.
-
 ## 📝 Autoría
 
 **Anti** fue creado y es mantenido por **Hunther4**.
 
-El proyecto fue diseñado e ingeniado desde **Maule, Chile** — con un enfoque de láser en la ingeniería local de alto rendimiento para agentes autonomous. Cada decisión arquitectónica prioriza la ejecución local, privacidad-por-defecto y máximo control sobre el proceso de razonamiento de la IA.
+El proyecto fue diseñado e ingeniado desde **Maule, Chile** — con un enfoque de láser en la ingeniería local de alto rendimiento para agentes autónomos. Cada decisión arquitectónica prioriza la ejecución local, privacidad-por-defecto y máximo control sobre el proceso de razonamiento de la IA.
 
 Esto no es un wrapper genérico de IA. Anti está construido especialmente para ingenieros que se preocupan por:
 - **Ejecución local** — Ningún dato sale de tu máquina
@@ -586,13 +532,6 @@ Esto no es un wrapper genérico de IA. Anti está construido especialmente para 
 Construido desde la región del Maule para el mundo.
 
 ---
-
-## 🙏 Acknowledgments
-
-- [LM Studio](https://lmstudio.ai) — Local LLM execution
-- [Ollama](https://ollama.com) — Local LLM execution
-- [OpenAI](https://openai.com) — Cloud AI services
-- [Google Gemini](https://gemini.google.com) — Cloud AI services
 
 ## 🙏 Agradecimientos
 
