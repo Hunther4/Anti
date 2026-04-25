@@ -250,9 +250,8 @@ See the [LICENSE](LICENSE) file for full details.
 
 ## 📝 Authorship
 
-**Anti** was created and is maintained by **Hunther4**.
+**Anti** was created by **Hunther4**.
 
-This is not a generic AI wrapper. Anti is purpose-built for engineers who care about:
 - **Local execution** — No data leaves your machine
 - **Persistent memory** — True context that survives sessions
 - **Autonomous evolution** — Self-improvement through the reflect/consolidate cycle
@@ -288,7 +287,7 @@ python main.py
 
 ## 🔌 Proveedores Soportados
 
-Anti detecta automáticamente qué proveedor tenés ejecutando. No necesitás configuración para proveedores locales.
+Anti detecta automáticamente qué proveedor tienes ejecutando. No necesitas configuración para proveedores locales.
 
 | Proveedor | Puerto | API Key | Auto-detect |
 |:---------|:-------|:-------|:----------:|
@@ -489,16 +488,16 @@ Reconoceremos tu reporte y trabajaremos en una solución lo más rápido posible
 R: Solo si usás proveedores locales (LM Studio u Ollama). Los proveedores en la nube (OpenAI, Gemini) funcionan en cualquier computadora con internet.
 
 **P: ¿Cómo cambio el modelo?**
-R: Configurá el parámetro "model" en config.json, o simplemente cargá un modelo diferente en LM Studio/Ollama antes de iniciar Anti.
+R: Configura el parámetro "model" en config.json, o simplemente carga un modelo diferente en LM Studio/Ollama antes de iniciar Anti.
 
 **P: ¿Qué pasa si no hay ningún proveedor corriendo?**
-R: Anti mostrará un error de conexión. Iniciá LM Studio u Ollama, o configurá una API key para OpenAI/Gemini.
+R: Anti mostrará un error de conexión. Inicia LM Studio u Ollama, o configura una API key para OpenAI/Gemini.
 
 **P: ¿Mis datos están seguros?**
 R: Sí. Los proveedores locales nunca envían datos externamente. Los proveedores en la nube usan encriptación estándar.
 
 **P: ¿Cómo funciona el comando reflect?**
-R: `reflect` fuerza un ciclo de Evolución Dual: extrae nuevos Engrams de los logs recientes, analiza patrones de éxito/fallo y genera Skills conductuales refinadas. Pensalo como el loop de auto-mejora del agente.
+R: `reflect` fuerza un ciclo de Evolución Dual: extrae nuevos Engrams de los logs recientes, analiza patrones de éxito/fallo y genera Skills conductuales refinadas. Piensa en ello como el loop de auto-mejora del agente.
 
 **P: ¿Qué es el benchmark Sentinel Gauntlet?**
 R: Un test de estrés de 5 fases que mide TPS (Tokens Per Second), latencia, gestión de contexto, éxito de ejecución de herramientas y fidelidad de personalidad. Esencial para evaluar qué LLM funciona mejor para tu caso de uso.
@@ -515,9 +514,8 @@ Ver el archivo [LICENSE](LICENSE) para detalles completos.
 
 ## 📝 Autoría
 
-**Anti** fue creado y es mantenido por **Hunther4**.
+**Anti** fue creado por **Hunther4**.
 
-Esto no es un wrapper genérico de IA. Anti está construido especialmente para ingenieros que se preocupan por:
 - **Ejecución local** — Ningún dato sale de tu máquina
 - **Memoria persistente** — Contexto real que sobrevive entre sesiones
 - **Evolución autónoma** — Auto-mejora a través del ciclo reflect/consolidate
