@@ -45,9 +45,35 @@ class AntiAgent:
         self.config_path = os.path.join(self.base_dir, "config.json")
         self.config = self._load_config()
 
-        self.brain = Brain(
-            base_url=self.config.get("lm_studio_url", "http://127.0.0.1:1234/v1")
-        )
+        # Inicializar proveedor (auto-detectar o específico)
+        from core.providers import create_provider, auto_create
+        
+        provider_type = self.config.get("provider", "auto")
+        if provider_type == "auto":
+            # Auto-detectar proveedor
+            try:
+                self.brain = auto_create(
+                    model=self.config.get("model"),
+                    timeout=self.config.get("timeout", 120)
+                )
+                print(f"[*] Proveedor auto-detectado: {type(self.brain).__name__}")
+            except Exception as e:
+                # Fallback a LM Studio
+                print(f"[!] Auto-detección falló: {e}. Usando LM Studio por defecto.")
+                self.brain = create_provider(
+                    "lmstudio",
+                    base_url=self.config.get("lm_studio_url", "http://127.0.0.1:1234/v1"),
+                    model=self.config.get("model")
+                )
+        else:
+            # Proveedor específico
+            url_config = self.config.get(f"{provider_type}_url", 
+                          self.config.get("lm_studio_url", "http://127.0.0.1:1234/v1"))
+            self.brain = create_provider(
+                provider_type,
+                base_url=url_config,
+                model=self.config.get("model")
+            )
 
         workspace_path = os.path.join(self.base_dir, "workspace")
         if not os.path.exists(workspace_path):
