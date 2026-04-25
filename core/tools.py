@@ -8,10 +8,16 @@ from urllib.parse import unquote
 def run_local_command(command: str) -> str:
     """
     Executes a shell command in the local environment.
+    SECURITY: Validates input to prevent shell injection.
     """
+    # Security: Block dangerous operators
+    dangerous = [';', '&&', '||', '|', '`', '$(', '$(']
+    if any(op in command for op in dangerous):
+        return f"[SEGURIDAD] Comando bloqueado: contiene operadores peligrosos."
+    
     try:
-        # Security note: This is powerful. Use with care.
-        result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=30)
+        # Use shell=False to prevent injection
+        result = subprocess.run(command.split(), shell=False, capture_output=True, text=True, timeout=30)
         output = result.stdout
         if result.stderr:
             output += f"\n[ERRORES]\n{result.stderr}"

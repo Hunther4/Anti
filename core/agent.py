@@ -2,12 +2,17 @@ import os
 import json
 import re
 import asyncio
+import logging
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 from core.brain import Brain
 from core.memory import MemoryManager
+from core.context_manager import ContextManager
 from core.scorer import PRMScorer
 from core.evolver import SkillEvolver
+from core.consolidator import MemoryConsolidator
 from core.tools import duckduckgo_search, fetch_url_text, autonomous_research, write_file, read_file, run_local_command
 from core.document_parser import parse_document
 from prompts.system import build_system_prompt
@@ -53,6 +58,9 @@ class AntiAgent:
             workspace_path=workspace_path
         )
 
+        # v0.6 Sentinel Core
+        self.context_mgr = ContextManager(model_context_length=32000)
+        
         self.is_running = True
         self.task_counter = 0
         self.history = []
@@ -62,6 +70,8 @@ class AntiAgent:
         url = self.config.get("lm_studio_url", "http://127.0.0.1:1234/v1")
         self.scorer = PRMScorer(prm_url=url, prm_model="local-model")
         self.evolver = SkillEvolver(base_url=url, model="local-model")
+        self.consolidator = MemoryConsolidator(self.memory, self.evolver)
+        self.last_maintenance_count = 0
 
     def _load_config(self):
         if os.path.exists(self.config_path):
@@ -132,8 +142,11 @@ class AntiAgent:
         elif cmd_lower.startswith("search "):
             query = cmd[7:].strip()
             return await self._force_search(query)
-        elif cmd_lower.startswith("admin"):
-            return await self._admin_command(cmd)
+        elif cmd_lower == "consolidate":
+            stats = await self.consolidator.run_maintenance()
+            return f"Consolidación finalizada: {stats['deleted_decay']} purgados, {stats['consolidated_engrams']} sintetizados."
+        elif cmd_lower == "benchmark":
+            return await self._run_benchmark()
         else:
             return await self._process(cmd, image_data=image_data)
 
@@ -219,12 +232,19 @@ class AntiAgent:
 
         messages.append({"role": "user", "content": user_content})
 
-        # Get response from LLM
-        response = await self.brain.chat(messages)
+        # Main Chat Inference
+        try:
+            response, usage = await self.brain.chat(messages)
+            prompt_tokens = usage.get("prompt_tokens", 0)
+            self.context_mgr.token_count = prompt_tokens
+        except Exception as e:
+            return f"Error en inferencia: {e}"
 
-        if "Error conectando con LM Studio" in response:
-            print(f"{Colors.RED}[!] {response}{Colors.END}")
-            return f"No pude procesar tu solicitud. Error de LM Studio: {response}"
+        # Handle both tuple (fixed) and string (legacy) error responses
+        response_str = response if isinstance(response, str) else response[0] if isinstance(response, tuple) else str(response)
+        if "Error conectando con LM Studio" in response_str:
+            print(f"{Colors.RED}[!] {response_str}{Colors.END}")
+            return f"No pude procesar tu solicitud. Error de LM Studio: {response_str}"
 
         # Clean model artifacts
         response = response.replace("<thought>", "").replace("</thought>", "").strip()
@@ -338,7 +358,9 @@ class AntiAgent:
             messages.append({"role": "assistant", "content": response})
             messages.append({"role": "user", "content": tool_context})
             print(f"{Colors.CYAN}[*] Procesando resultado de herramienta...{Colors.END}")
-            response = await self.brain.chat(messages)
+            response, usage = await self.brain.chat(messages)
+            prompt_tokens = usage.get("prompt_tokens", 0)
+            self.context_mgr.token_count = prompt_tokens
             response = response.replace("<thought>", "").replace("</thought>", "").strip()
             tool_step += 1
 
@@ -346,7 +368,7 @@ class AntiAgent:
         if self.reasoner_mode:
             print(f"{Colors.YELLOW}[*] Reasoner: auto-critica...{Colors.END}")
             critic_prompt = REASONER_PROMPT.format(user_msg=user_msg, response=response)
-            response = await self.brain.chat([{"role": "user", "content": critic_prompt}])
+            response, _ = await self.brain.chat([{"role": "user", "content": critic_prompt}])
             print(f"{Colors.GREEN}[+] Respuesta refinada.{Colors.END}")
 
         # Evaluate response with PRM Scorer
@@ -370,7 +392,7 @@ class AntiAgent:
                     f"asegurandote de responder exactamente lo que se pidio: '{user_text}'.\n\n"
                     f"Respuesta rechazada:\n{response}"
                 )
-                response = await self.brain.chat([{"role": "user", "content": correction_prompt}])
+                response, _ = await self.brain.chat([{"role": "user", "content": correction_prompt}])
                 response = response.replace("<thought>", "").replace("</thought>", "").strip()
                 print(f"{Colors.GREEN}[+] Respuesta corregida y lista.{Colors.END}")
 
@@ -379,6 +401,11 @@ class AntiAgent:
 
         # Log and update history
         self.memory.log_experience(f"Chat: {user_msg}", response, is_success, score, votes)
+        
+        # ACTUALIZACIÓN DE ESTADÍSTICAS DE USO (Decay System)
+        if hasattr(self.memory, 'last_retrieved_topics'):
+            for topic in self.memory.last_retrieved_topics:
+                self.memory.update_usage_stats(topic, is_success)
 
         self.history.append({"role": "user", "content": user_msg})
         self.history.append({"role": "assistant", "content": response})
@@ -388,16 +415,30 @@ class AntiAgent:
         # Auto-maintenance
         self.task_counter += 1
         if self.task_counter >= 10:
-            print(f"{Colors.YELLOW}[*] Auto-mantenimiento (ciclo de 10 mensajes)...{Colors.END}")
+            print(f"{Colors.YELLOW}[*] Auto-reflexión conductual (10 mensajes)...{Colors.END}")
             await self._reflect()
             self.task_counter = 0
+
+        # Autonomous Maintenance by Integrity Matrix (v0.5)
+        await self._check_integrity(prompt_tokens)
 
         # Final structured response for Web UI
         return {
             "response": response,
             "steps": execution_steps,
-            "sources": extracted_sources
+            "sources": extracted_sources,
+            "usage": usage,
+            "score": score
         }
+
+    async def _run_benchmark(self):
+        from core.benchmark import SentinelGauntlet
+        print(f"{Colors.YELLOW}[*] Iniciando protocolo SENTINEL GAUNTLET...{Colors.END}")
+        runner = SentinelGauntlet(self)
+        report_path = await runner.run()
+        msg = f"Benchmark finalizado con exito.\nReporte generado: {report_path}"
+        print(f"{Colors.GREEN}[+] {msg}{Colors.END}")
+        return msg
 
     # --- Reasoner ---
 
@@ -534,7 +575,7 @@ class AntiAgent:
             return
 
         prompt = COMPACT_PROMPT.format(patterns=patterns[:4000])
-        compacted = await self.brain.chat([{"role": "user", "content": prompt}])
+        compacted, _ = await self.brain.chat([{"role": "user", "content": prompt}])
         self.memory.save_pattern(compacted)
         print(f"{Colors.GREEN}[+] Memoria compactada.{Colors.END}")
 
@@ -552,6 +593,7 @@ ANTI-AGENT — COMANDOS
   reflect     Analiza experiencias pasadas y genera reglas (evolución).
   memories    Muestra un resumen de la memoria del agente (logs, patrones, engrams).
   engra       Lista todos los engrams (conocimiento persistente) con resumen.
+  benchmark   Ejecuta el protocolo SENTINEL GAUNTLET v1.0.
   compact     Comprime la memoria de patrones.
   forget      Borra toda la memoria.
   status      Estado del sistema.
@@ -596,8 +638,8 @@ MEMORIA DEL AGENTE
                     content = data.get("content", "")
                     summary = content[:100] + "..." if len(content) > 100 else content
                     output.append(f"- {topic}: {summary}")
-            except:
-                continue
+            except (json.JSONDecodeError, IOError) as e:
+                logger.warning(f"[Agent] Error reading engram {filename}: {e}")
         
         res = "\n".join(output)
         print(f"{Colors.GREEN}{res}{Colors.END}")
@@ -609,14 +651,75 @@ MEMORIA DEL AGENTE
         logs = self.memory.get_recent_logs(1000)
         reasoner_status = "ON" if self.reasoner_mode else "OFF"
 
+        # v0.6 Sentinel Metrics
+        ctx_stats = self.context_mgr.get_advanced_stats()
+        load_percent = self.context_mgr.usage_percent
+        integrity_level = self.context_mgr.get_load_level()
+        
         status_text = f"""
-ESTADO DEL SISTEMA
+ESTADO DEL SISTEMA (Sentinel v1.3 Active)
   LM Studio:       {conn_str}
   Modo Reasoner:   {reasoner_status}
   Skills:          {len(self.memory.skills.skills)} activas
   Experiencias:    {len(logs)} logs registrados
   Workspace:       {self.memory.count_workspace_files()} archivos
   Engrams:         {self.memory.count_engrams()} memorias
+  
+  [Context Integrity]
+  Carga Actual:    {load_percent}% ({integrity_level})
+  Eficiencia:      {ctx_stats['efficiency_score']}%
+  Tokens Salvados: {self.context_mgr.tokens_saved}
 """
         print(status_text)
         return status_text
+
+    async def _check_integrity(self, current_prompt_tokens=0):
+        """
+        Trigger unificado basado en Matriz de Integridad v0.5 (Anti Edition).
+        """
+        # 0. Actualizar contador de tokens en el manager
+        if current_prompt_tokens > 0:
+            self.context_mgr.token_count = current_prompt_tokens
+            
+        # 1. Sync dynamic context
+        await self.brain.sync_model_context()
+        context_info = await self.brain.get_context_info()
+        model_context = context_info.get("max", 32000)
+        
+        # Re-inicializar si cambió el context del modelo
+        if self.context_mgr.model_context_length != model_context:
+            self.context_mgr = ContextManager(model_context)
+        
+        # 2. Get load level
+        usage_percent = self.context_mgr.usage_percent
+        level = self.context_mgr.get_load_level()
+        action = self.context_mgr.get_integrity_action()
+        
+        # 3. Execute action
+        if level == "warning":
+            removed = self.context_mgr.deduplicate()
+            if removed > 0:
+                print(f"{Colors.YELLOW}[*] Anti-Deduplication: {removed} mensajes redundantes eliminados.{Colors.END}")
+            
+        elif level == "critical" or level == "overflow":
+            print(f"{Colors.RED}[!] Anti-Alert ({level}): {usage_percent}%. Limpieza Sentinel...{Colors.END}")
+            self.context_mgr.deduplicate()
+            await self.consolidator.run_maintenance()
+            await self._compact_memory()
+            return
+
+        # 4. Memoria basada en engrams
+        engrams_count = self.memory.count_engrams()
+        skills_count = len(self.memory.skills.skills)
+        total = engrams_count + skills_count
+        thresholds = [20] + list(range(50, 550, 50))
+        
+        current_threshold = 0
+        for t in thresholds:
+            if total >= t: current_threshold = t
+            else: break
+        
+        if current_threshold > self.last_maintenance_count:
+            print(f"{Colors.CYAN}[*] Anti-Memory Threshold ({total}). Consolidando...{Colors.END}")
+            await self.consolidator.run_maintenance()
+            self.last_maintenance_count = current_threshold

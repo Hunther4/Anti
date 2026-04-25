@@ -145,6 +145,10 @@ class SkillManager:
                 lines.append(content)
         return "\n".join(lines)
 
+    def get_all_skills(self):
+        """Returns all loaded skills."""
+        return self.skills
+
     def add_skill(self, name, description, content, category="general"):
         """Add a new skill and save it to disk."""
         # Sanitize name for folder

@@ -12,7 +12,7 @@ import os
 import re
 import requests
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +151,31 @@ class SkillEvolver:
 
     # --- Dual Evolution: Factual Engrams ---
     
-    async def extract_engrams(self, logs: list) -> list[dict]:
+    def _check_duplicate_engram(self, new_content, engrams_dir):
+        """Calcula la similitud de Jaccard con engrams existentes para evitar duplicados."""
+        new_tokens = set(re.findall(r'\w+', new_content.lower()))
+        if not new_tokens: return False, None
+
+        if not os.path.exists(engrams_dir): return False, None
+
+        for filename in os.listdir(engrams_dir):
+            if not filename.endswith(".json"): continue
+            try:
+                with open(os.path.join(engrams_dir, filename), "r") as f:
+                    old_data = json.load(f)
+                    old_tokens = set(re.findall(r'\w+', old_data.get("content", "").lower()))
+                    
+                    if not old_tokens: continue
+                    intersection = new_tokens & old_tokens
+                    union = new_tokens | old_tokens
+                    similarity = len(intersection) / len(union)
+                    
+                    if similarity > 0.6: # Umbral de duplicidad
+                        return True, old_data.get("topic")
+            except: continue
+        return False, None
+
+    async def extract_engrams(self, logs: List[Dict]) -> List[Dict]:
         """
         Analyze logs to extract factual knowledge (Engrams).
         """
