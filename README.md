@@ -90,7 +90,7 @@ exit      — Exit
 ## 📂 Structure
 
 ```
-core/
+src/
 ├── agent.py        # Main CLI
 ├── brain.py       # Chat logic
 ├── memory.py      # Memory
