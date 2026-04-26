@@ -91,7 +91,6 @@ class Brain:
         
         import json
         payload_size = len(json.dumps(payload))
-        print(f"[*] Payload size: {payload_size} bytes")
         
         last_error = None
         for attempt in range(self.max_retries):
@@ -114,7 +113,7 @@ class Brain:
                     total_tokens = max(int(usage_raw.get('total_tokens', 0)), 0)
                 except (ValueError, TypeError):
                     # Fallback to regex count if server data is corrupt
-                    print("[!] Sentinel Warning: Data corruption in 'usage'. Using Regex Fallback.")
+                    logger.warning("Sentinel Warning: Data corruption in 'usage'. Using Regex Fallback.")
                     prompt_tokens = self.count_tokens(str(messages))
                     completion_tokens = self.count_tokens(content)
                     total_tokens = prompt_tokens + completion_tokens
@@ -129,10 +128,6 @@ class Brain:
                 
                 duration = end_time - start_time
                 tps = completion_tokens / duration if duration > 0 else 0
-                
-                # Log metrics to console (optional but helpful for the user)
-                print(f"\n[METRICS] Prompt: {prompt_tokens} | Completion: {completion_tokens} | Total: {total_tokens}")
-                print(f"[METRICS] Time: {duration:.2f}s | Speed: {tps:.2f} t/s\n")
                 
                 # Update context info based on response (if model provides context info)
                 # Note: 'usage' doesn't give context_length, but we store current prompt size
@@ -277,12 +272,12 @@ class Brain:
                 
                 changed = False
                 if new_model != self.model:
-                    print(f"[v0.5] Model changed: {self.model} → {new_model}")
+                    logger.info(f"Model changed: {self.model} → {new_model}")
                     self.model = new_model
                     changed = True
                 
                 if new_context != old_context:
-                    print(f"[v0.5] Context changed: {old_context} → {new_context}")
+                    logger.info(f"Context changed: {old_context} → {new_context}")
                     self.context_max = new_context
                     self._update_threshold()
                     changed = True
@@ -290,7 +285,7 @@ class Brain:
                 return {"changed": changed, "old_context": old_context, "new_context": self.context_max, "model": self.model}
                     
         except Exception as e:
-            print(f"[v0.5] Context sync failed: {e}")
+            logger.warning(f"Context sync failed: {e}")
         
         return {"changed": False}
     

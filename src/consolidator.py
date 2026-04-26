@@ -14,12 +14,12 @@ class MemoryConsolidator:
 
     async def run_maintenance(self):
         """Ejecuta un ciclo completo de mantenimiento autónomo"""
-        print("[*] Iniciando consolidación autónoma de memoria...")
+        # print("[*] Iniciando consolidación autónoma de memoria...") # Basura removed
         
         # 1. Ejecutar Decay (Limpieza por rendimiento)
         deleted_decay = self.memory.decay_old_engrams()
         if deleted_decay > 0:
-            print(f"[+] Decay: {deleted_decay} engrams eliminados.")
+            logger.info(f"Decay: {deleted_decay} engrams eliminados.")
 
         # 2. Consolidación de Engrams (Síntesis)
         consolidated_engrams = await self._consolidate_engrams()
@@ -58,7 +58,7 @@ class MemoryConsolidator:
             )
             
             if not low_score_obs:
-                print("[*] Auto-purge: no hay observaciones con bajo score")
+                # print("[*] Auto-purge: no hay observaciones con bajo score")
                 return 0
             
             # Filtrar las que pueden purgearse (inactivas por mucho tiempo)
@@ -87,7 +87,7 @@ class MemoryConsolidator:
             
             if to_purge:
                 deleted = self.memory.archive.purge_observations(to_purge)
-                print(f"[*] Auto-purge: {deleted} observaciones eliminadas")
+                logger.info(f"Auto-purge: {deleted} observaciones eliminadas")
                 return deleted
             
             print("[*] Auto-purge: ninguna observación califica para purgar")
@@ -132,7 +132,7 @@ class MemoryConsolidator:
 
         count = 0
         for cluster in clusters:
-            print(f"[*] Consolidando cluster de engrams: {cluster}")
+            logger.info(f"Consolidando cluster de engrams: {cluster}")
             # Cargar contenidos
             contents = []
             for f in cluster:
@@ -207,7 +207,7 @@ class MemoryConsolidator:
 
         count = 0
         for cluster in clusters:
-            print(f"[*] Consolidando cluster de skills: {cluster}")
+            logger.info(f"Consolidando cluster de skills: {cluster}")
             contents = []
             for d in cluster:
                 with open(os.path.join(skills_dir, d, "SKILL.md"), 'r') as file:

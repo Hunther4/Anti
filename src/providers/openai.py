@@ -33,8 +33,11 @@ class OpenAIProvider(BaseProvider):
         if not self.api_key:
             logger.warning("[OpenAI] OPENAI_API_KEY no configurada")
     
-    def chat(self, messages: List[Dict], temperature: float = 0.7) -> Tuple[str, Dict[str, Any]]:
+    async def chat(self, messages: List[Dict], temperature: float = 0.7) -> Tuple[str, Dict[str, Any]]:
         """Envía un chat a OpenAI."""
+        return await asyncio.to_thread(self._chat_sync, messages, temperature)
+
+    def _chat_sync(self, messages: List[Dict], temperature: float = 0.7) -> Tuple[str, Dict[str, Any]]:
         import time
         
         if not self.api_key:
@@ -93,8 +96,11 @@ class OpenAIProvider(BaseProvider):
         
         raise ConnectionError(f"OpenAI no disponible: {last_error}")
     
-    def list_models(self) -> List[Dict[str, Any]]:
+    async def list_models(self) -> List[Dict[str, Any]]:
         """Lista modelos disponibles en OpenAI."""
+        return await asyncio.to_thread(self._list_models_sync)
+
+    def _list_models_sync(self) -> List[Dict[str, Any]]:
         if not self.api_key:
             return []
         
@@ -129,8 +135,11 @@ class OpenAIProvider(BaseProvider):
             logger.warning(f"[OpenAI] Error listando modelos: {e}")
             return []
     
-    def check_connection(self) -> bool:
+    async def check_connection(self) -> bool:
         """Verifica conexión con OpenAI."""
+        return await asyncio.to_thread(self._check_connection_sync)
+
+    def _check_connection_sync(self) -> bool:
         if not self.api_key:
             return False
         

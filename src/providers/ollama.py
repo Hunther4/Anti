@@ -30,8 +30,11 @@ class OllamaProvider(BaseProvider):
         # Ollama usa el nombre del modelo tal cual
         self._model = model or "llama3"
     
-    def chat(self, messages: List[Dict], temperature: float = 0.7) -> Tuple[str, Dict[str, Any]]:
+    async def chat(self, messages: List[Dict], temperature: float = 0.7) -> Tuple[str, Dict[str, Any]]:
         """Envia un chat a Ollama."""
+        return await asyncio.to_thread(self._chat_sync, messages, temperature)
+
+    def _chat_sync(self, messages: List[Dict], temperature: float = 0.7) -> Tuple[str, Dict[str, Any]]:
         import time
         
         url = f"{self.base_url}{self.API_ENDPOINT}"
@@ -94,8 +97,11 @@ class OllamaProvider(BaseProvider):
         
         raise ConnectionError(f"Ollama no disponible después de {self.max_retries} intentos: {last_error}")
     
-    def list_models(self) -> List[Dict[str, Any]]:
+    async def list_models(self) -> List[Dict[str, Any]]:
         """Lista modelos disponibles en Ollama."""
+        return await asyncio.to_thread(self._list_models_sync)
+
+    def _list_models_sync(self) -> List[Dict[str, Any]]:
         try:
             url = f"{self.base_url}/api/tags"
             session = self.get_session()
@@ -147,8 +153,11 @@ class OllamaProvider(BaseProvider):
             logger.warning(f"[Ollama] Error listando modelos: {e}")
             return [{"id": self._model, "context_length": 8192}]
     
-    def check_connection(self) -> bool:
+    async def check_connection(self) -> bool:
         """Verifica conexión con Ollama."""
+        return await asyncio.to_thread(self._check_connection_sync)
+
+    def _check_connection_sync(self) -> bool:
         try:
             session = self.get_session()
             response = session.get(
@@ -175,6 +184,24 @@ class OllamaProvider(BaseProvider):
         
         return ollama_msgs
     
+    async def sync_model_context(self):
+        """Sincroniza modelo y contexto."""
+        models = await self.list_models()
+        if models:
+            self._model = models[0]["id"]
+            self.model = self._model
+            self.context_max = models[0]["context_length"]
+            self.usable = self.context_max - 2000
+            self.threshold = int(self.usable * 0.8)
+
+    async def get_context_info(self) -> Dict[str, Any]:
+        """Retorna info del contexto."""
+        return {
+            "max": self.context_max,
+            "usable": self.usable,
+            "threshold": self.threshold
+        }
+
     def _get_context_length(self, model_id: str = None) -> int:
         """Obtiene el context_length del modelo."""
         model_id = model_id or self._model

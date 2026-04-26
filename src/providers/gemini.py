@@ -9,6 +9,7 @@ API: https://generativelanguage.googleapis.com/v1beta/models/{model}:generateCon
 import requests
 import os
 import json
+import asyncio
 import logging
 from typing import List, Dict, Tuple, Any
 
@@ -42,8 +43,11 @@ class GeminiProvider(BaseProvider):
         if not self.api_key:
             logger.warning("[Gemini] GEMINI_API_KEY no configurada")
     
-    def chat(self, messages: List[Dict], temperature: float = 0.7) -> Tuple[str, Dict[str, Any]]:
+    async def chat(self, messages: List[Dict], temperature: float = 0.7) -> Tuple[str, Dict[str, Any]]:
         """Envía un chat a Gemini."""
+        return await asyncio.to_thread(self._chat_sync, messages, temperature)
+
+    def _chat_sync(self, messages: List[Dict], temperature: float = 0.7) -> Tuple[str, Dict[str, Any]]:
         import time
         
         if not self.api_key:
@@ -118,8 +122,11 @@ class GeminiProvider(BaseProvider):
         
         raise ConnectionError(f" Gemini no disponible: {last_error}")
     
-    def list_models(self) -> List[Dict[str, Any]]:
+    async def list_models(self) -> List[Dict[str, Any]]:
         """Lista modelos disponibles en Gemini."""
+        return await asyncio.to_thread(self._list_models_sync)
+
+    def _list_models_sync(self) -> List[Dict[str, Any]]:
         if not self.api_key:
             return []
         
@@ -152,8 +159,11 @@ class GeminiProvider(BaseProvider):
             logger.warning(f"[Gemini] Error listando modelos: {e}")
             return []
     
-    def check_connection(self) -> bool:
+    async def check_connection(self) -> bool:
         """Verifica conexión con Gemini."""
+        return await asyncio.to_thread(self._check_connection_sync)
+
+    def _check_connection_sync(self) -> bool:
         if not self.api_key:
             return False
         

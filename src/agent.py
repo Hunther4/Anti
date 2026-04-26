@@ -56,10 +56,10 @@ class AntiAgent:
                     model=self.config.get("model"),
                     timeout=self.config.get("timeout", 120)
                 )
-                print(f"[*] Proveedor auto-detectado: {type(self.brain).__name__}")
+                logger.info(f"Proveedor auto-detectado: {type(self.brain).__name__}")
             except Exception as e:
                 # Fallback a LM Studio
-                print(f"[!] Auto-detección falló: {e}. Usando LM Studio por defecto.")
+                logger.warning(f"Auto-detección falló: {e}. Usando LM Studio por defecto.")
                 self.brain = create_provider(
                     "lmstudio",
                     base_url=self.config.get("lm_studio_url", "http://127.0.0.1:1234/v1"),
@@ -113,7 +113,7 @@ class AntiAgent:
 
     def run(self):
         name = self.config.get("agent_name", "ANTI-AGENT")
-        print_header(name)
+        # print_header(name) # Removed header basura
 
         if not asyncio.run(self.brain.check_connection()):
             url = self.config.get("lm_studio_url", "http://127.0.0.1:1234/v1")
@@ -171,6 +171,8 @@ class AntiAgent:
         elif cmd_lower == "consolidate":
             stats = await self.consolidator.run_maintenance()
             return f"Consolidación finalizada: {stats['deleted_decay']} purgados, {stats['consolidated_engrams']} sintetizados."
+        elif cmd_lower == "renew" or cmd_lower == "/r":
+            return await self._renew_system()
         
         # --- MCP Commands (Phase 3.2) ---
         elif cmd_lower.startswith("mcp "):
@@ -183,7 +185,7 @@ class AntiAgent:
     # --- Core Processing ---
 
     async def _process(self, user_msg, image_data=None):
-        print(f"{Colors.CYAN}[*] Pensando...{Colors.END}")
+        # print(f"{Colors.CYAN}[*] Pensando...{Colors.END}") # Silenced for less garbage
 
         name = self.config.get("agent_name", "Anti")
         personality = self.config.get("personality", "Sos un agente autonomo avanzado.")
@@ -410,14 +412,14 @@ class AntiAgent:
             print(f"{Colors.YELLOW}[*] Reasoner: auto-critica...{Colors.END}")
             critic_prompt = REASONER_PROMPT.format(user_msg=user_msg, response=response)
             response, _ = await self.brain.chat([{"role": "user", "content": critic_prompt}])
-            print(f"{Colors.GREEN}[+] Respuesta refinada.{Colors.END}")
+            # print(f"{Colors.GREEN}[+] Respuesta refinada.{Colors.END}") # Silenced
 
         # Evaluate response with PRM Scorer
         is_success = True
         score = 0.0
         votes = []
         try:
-            print(f"{Colors.BLUE}[*] Scorer evaluando respuesta...{Colors.END}")
+            # print(f"{Colors.BLUE}[*] Scorer evaluando respuesta...{Colors.END}") # Silenced
             eval_result = await self.scorer.evaluate(response, user_text)
             score = eval_result["score"]
             votes = eval_result["votes"]
@@ -475,7 +477,7 @@ class AntiAgent:
         # Auto-maintenance
         self.task_counter += 1
         if self.task_counter >= 10:
-            print(f"{Colors.YELLOW}[*] Auto-reflexión conductual (10 mensajes)...{Colors.END}")
+            # print(f"{Colors.YELLOW}[*] Auto-reflexión conductual (10 mensajes)...{Colors.END}") # Silenced
             await self._reflect()
             self.task_counter = 0
 
@@ -500,9 +502,44 @@ class AntiAgent:
         print(f"{Colors.YELLOW}[*] {msg}{Colors.END}")
         return msg
 
+    async def _renew_system(self):
+        """Reinicia el servidor y refresca el estado del sistema."""
+        print(f"{Colors.BLUE}[*] Iniciando ciclo de renovación...{Colors.END}")
+        try:
+            # Matar servidor existente
+            subprocess.run(["pkill", "-f", "server.py"], capture_output=True)
+            print(f"{Colors.BLUE}[*] Servidores previos detenidos.{Colors.END}")
+            
+            # Iniciar nuevo servidor en segundo plano
+            # Usamos el python del venv si existe, sino el del sistema
+            python_exe = "python3"
+            if os.path.exists("venv/bin/python3"):
+                python_exe = "venv/bin/python3"
+            
+            subprocess.Popen([python_exe, "server.py"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print(f"{Colors.GREEN}[+] Nuevo servidor iniciado con el código actualizado.{Colors.END}")
+            
+            # Pequeña pausa para asegurar el arranque
+            await asyncio.sleep(1)
+            return "✅ Sistema renovado. El dashboard y el servidor ahora corren con la última versión."
+        except Exception as e:
+            return f"❌ Error al renovar: {e}"
+
     async def _force_search(self, query):
-        print(f"{Colors.YELLOW}[*] Forzando búsqueda web: {query}...{Colors.END}")
-        search_results = duckduckgo_search(query)
+        from src.tools import duckduckgo_search
+        time_period = None
+        if query.endswith("/d"):
+            time_period = "d"
+            query = query[:-2].strip()
+        elif query.endswith("/w"):
+            time_period = "w"
+            query = query[:-2].strip()
+        elif query.endswith("/m"):
+            time_period = "m"
+            query = query[:-2].strip()
+
+        print(f"{Colors.YELLOW}[*] Forzando búsqueda web ({time_period or 'todo'}): {query}...{Colors.END}")
+        search_results = duckduckgo_search(query, time_period=time_period)
         
         context = f"El usuario forzo una busqueda web para: {query}\n\nResultados:\n{search_results}\n\nResponde en base a esto."
         return await self._process(context)
@@ -788,6 +825,8 @@ ANTI-AGENT — COMANDOS
     memories    Muestra un resumen de la memoria del agente (logs, patrones, engrams).
     engra       Lista todos los engrams (conocimiento persistente) con resumen.
     compact     Comprime la memoria de patrones.
+    consolidate Inicia el mantenimiento autónomo y purga de datos.
+    renew / /r  Reinicia el servidor y aplica las últimas actualizaciones.
     forget      Borra toda la memoria.
     status      Estado del sistema.
     exit/quit   Apagar.

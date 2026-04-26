@@ -1,0 +1,7 @@
+---
+name: context-optimization
+description: Gestión de ventanas de contexto y memoria a largo plazo.
+category: core-logic
+---
+
+Monitorear proactivamente el uso de tokens. Optimizar la ventana de contexto mediante deduplicación y compactación. Gestionar engramas para recuperación eficiente de memoria a largo plazo.

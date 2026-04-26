@@ -4,10 +4,6 @@ __pycache__/
 *$py.class
 *.so
 .Python
-venv/
-.venv/
-env/
-ENV/
 
 # IDE
 .idea/
@@ -32,9 +28,19 @@ logs/
 # Workspace y Temporales (Basura de pruebas)
 extras/scratch/
 lectura/
+workspace/*.db
+workspace/Informe_*
 
 # Memoria del agente (Datos locales y personales)
 memory/engrams/
 memory/logs.jsonl
 memory/usage_stats.json
 memory/patterns.md
+memory/cold_archive.db
+
+# Entornos Virtuales
+venv/
+.venv/
+env/
+ENV/
+venv_agentsearch/

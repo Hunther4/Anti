@@ -44,6 +44,10 @@ class BaseProvider(ABC):
     async def get_context_info(self) -> Dict[str, Any]:
         """Retorna información detallada sobre el contexto."""
         pass
+
+    async def get_model_info(self) -> str:
+        """Retorna el nombre del modelo actual."""
+        return self.model
     
     @abstractmethod
     async def check_connection(self) -> bool:
