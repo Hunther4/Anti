@@ -1,0 +1,10 @@
+requests==2.32.3
+aiohttp==3.11.11
+html2text==2024.2.26
+pypdf==4.0.1
+playwright==1.41.2
+python-dotenv==1.0.0
+argparse
+logging
+asyncio
+sqlite3

@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Keys y Variables de Entorno (NUNCA subir)
+.env
+.env.local
+*.key
+*.pem
+
+# Logs
+logs/
+*.log
+
+# Workspace y Temporales (Basura de pruebas)
+extras/scratch/
+lectura/
+workspace/*.db
+workspace/Informe_*
+
+# Memoria del agente (Datos locales y personales)
+memory/engrams/
+memory/logs.jsonl
+memory/usage_stats.json
+memory/patterns.md
+memory/cold_archive.db
+
+# Entornos Virtuales
+venv/
+.venv/
+env/
+ENV/
+venv_agentsearch/

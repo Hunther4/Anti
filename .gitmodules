@@ -1,0 +1,3 @@
+[submodule "agent-search"]
+	path = agent-search
+	url = https://github.com/brcrusoe72/agent-search
