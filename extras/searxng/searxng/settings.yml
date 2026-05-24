@@ -1,0 +1,23 @@
+use_default_settings: false
+general:
+  instance_name: "Anti Search Engine - EXTREME"
+search:
+  autocomplete: "google"
+  formats: [html, json]
+server:
+  port: 8080
+  bind_address: "0.0.0.0"
+  secret_key: "vane_anti_secret_key_12345"
+engines:
+  - name: google
+    engine: google
+    timeout: 10.0
+  - name: bing
+    engine: bing
+    timeout: 10.0
+  - name: brave
+    engine: brave
+    timeout: 10.0
+  - name: reddit
+    engine: reddit
+    timeout: 10.0
