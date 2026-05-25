@@ -1,3 +1,4 @@
+import re
 from src.plugin_manager import anti_tool
 import src.tools as tools_lib
 import asyncio
@@ -6,13 +7,18 @@ import asyncio
 def search_tool(raw_args: str):
     return tools_lib.duckduckgo_search(raw_args.strip())
 
+ALLOWED_COMMANDS = {"ls", "pwd", "cat", "head", "tail", "echo", "date", "whoami", "which", "python3", "python", "pip", "npm", "go", "cargo", "node", "curl", "wget", "git", "docker", "make"}
+
 @anti_tool(name="RUN", description="Ejecuta un comando de bash en el entorno seguro local.")
 def run_tool(raw_args: str):
-    return tools_lib.run_local_command(raw_args.strip())
+    cmd = raw_args.strip()
+    base_cmd = cmd.split()[0] if cmd else ""
+    if base_cmd not in ALLOWED_COMMANDS:
+        return f"[ERROR] Comando '{base_cmd}' no permitido. Usá uno de: {', '.join(sorted(ALLOWED_COMMANDS))}"
+    return tools_lib.run_local_command(cmd, timeout=30)
 
 @anti_tool(name="WRITE", description="Crea o edita archivos locales. Formato recomendado:\nruta/archivo\n---\ncontenido\n\n(O el formato heredado: ruta/archivo | contenido)")
 def write_tool(raw_args: str):
-    import re
     raw_args = raw_args.strip()
     
     # Estrategia 1: Delimitador multilínea robusto

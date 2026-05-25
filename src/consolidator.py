@@ -4,6 +4,8 @@ import asyncio
 import re
 import logging
 from typing import List, Dict
+import shutil
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +51,6 @@ class MemoryConsolidator:
         PURGE_THRESHOLD = 1.0
         DAYS_INACTIVE_TO_PURGE = 30
         
-        from datetime import timedelta
-        
         try:
             # Obtener observaciones con bajo score
             low_score_obs = self.memory.archive._get_low_score_observations(
@@ -62,7 +62,6 @@ class MemoryConsolidator:
                 return 0
             
             # Filtrar las que pueden purgearse (inactivas por mucho tiempo)
-            from datetime import datetime
             now = datetime.now()
             to_purge = []
             
@@ -142,11 +141,11 @@ class MemoryConsolidator:
             # Pedir al LLM que los sintetice
             merged = await self._ask_llm_to_merge_engrams(contents)
             if merged:
-                # Borrar originales
+                # Guardar nuevo PRIMERO
+                self.memory.save_engram(merged['topic'], merged['content'])
+                # Borrar originales SOLO si save_engram fue exitoso
                 for f in cluster:
                     os.remove(os.path.join(engrams_path, f))
-                # Guardar nuevo
-                self.memory.save_engram(merged['topic'], merged['content'])
                 count += 1
         return count
 
@@ -215,16 +214,14 @@ class MemoryConsolidator:
             
             merged = await self._ask_llm_to_merge_skills(contents)
             if merged:
-                # Borrar originales
-                import shutil
-                for d in cluster:
-                    shutil.rmtree(os.path.join(skills_dir, d))
-                
-                # Crear nueva carpeta y archivo
+                # Crear nueva carpeta y archivo PRIMERO
                 new_dir = os.path.join(skills_dir, merged['name'])
                 os.makedirs(new_dir, exist_ok=True)
                 with open(os.path.join(new_dir, "SKILL.md"), 'w') as f:
                     f.write(merged['content'])
+                # Borrar originales SOLO si la creación fue exitosa
+                for d in cluster:
+                    shutil.rmtree(os.path.join(skills_dir, d))
                 count += 1
         
         if count > 0:

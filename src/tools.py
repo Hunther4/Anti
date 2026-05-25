@@ -50,7 +50,11 @@ class WigoloCache:
             row = c.fetchone()
             if row and (time.time() - row[1]) < (max_age_hours * 3600):
                 self.hits += 1
-                return json.loads(row[0])
+                try:
+                    return json.loads(row[0])
+                except (json.JSONDecodeError, TypeError):
+                    self.misses += 1
+                    return None
             self.misses += 1
             return None
 
@@ -95,7 +99,13 @@ def is_safe_url(url: str) -> bool:
         return False
 
 
-def run_local_command(command: str) -> str:
+async def _is_safe_url_async(url: str) -> bool:
+    """Async version of is_safe_url that doesn't block the event loop."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, is_safe_url, url)
+
+
+def run_local_command(command: str, timeout: int = 45) -> str:
     """
     Executes a shell command in a secure, sandboxed Docker container.
     Mounts the workspace directory to /workspace inside the container.
@@ -126,6 +136,8 @@ def run_local_command(command: str) -> str:
             "docker", "run", "--rm",
             "--memory=512m",
             "--cpus=1.0",
+            "--network=none",
+            "--cap-drop=ALL",
         ] + user_flag + [
             "-v", f"{workspace_dir}:/workspace",
             "-w", "/workspace",
@@ -133,7 +145,7 @@ def run_local_command(command: str) -> str:
             "sh", "-c", command
         ]
         try:
-            result = subprocess.run(docker_cmd, capture_output=True, text=True, timeout=45)
+            result = subprocess.run(docker_cmd, capture_output=True, text=True, timeout=timeout)
             output = result.stdout
             if result.stderr:
                 cleaned_stderr = "\n".join(
@@ -222,7 +234,7 @@ def duckduckgo_search(query: str, max_results: int = 5, time_period: str = None)
     # 1.5 Try Google Search Scraper (Robust)
     try:
         google_results = google_search(query, max_results=max_results, time_period=time_period)
-        if "No se encontraron resultados" not in google_results:
+        if not google_results.startswith("Error en Google Search") and "No se encontraron resultados" not in google_results:
             wigolo_cache.set(query, google_results)
             return google_results
     except Exception as e:
@@ -278,7 +290,7 @@ def duckduckgo_search(query: str, max_results: int = 5, time_period: str = None)
         html = response.text
 
         links = re.findall(r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', html, re.DOTALL)
-        snippets = re.findall(r'class="result__snippet"[^>]*>(.*?)</a', html, re.DOTALL)
+        snippets = re.findall(r'class="result__snippet"[^>]*>(.*?)</div>', html, re.DOTALL)
 
         if not links:
             return f"No se encontraron resultados para: {query}"
@@ -381,7 +393,7 @@ async def browser_fetch(url: str) -> str:
     Fetches a URL using a real browser (Firefox) via Playwright.
     Handles JavaScript rendering.
     """
-    if not is_safe_url(url):
+    if not await _is_safe_url_async(url):
         return f"[SEGURIDAD] Acceso bloqueado a la URL: {url}. Las direcciones privadas, loopback o de metadatos de nube están prohibidas."
 
     if not HAS_PLAYWRIGHT:
@@ -443,7 +455,7 @@ def safe_join(base_dir: str, path: str) -> str:
     abs_base = os.path.abspath(base_dir)
     abs_path = os.path.abspath(os.path.join(abs_base, path))
     
-    if not abs_path.startswith(abs_base):
+    if os.path.commonpath([abs_base, abs_path]) != abs_base:
         raise PermissionError(f"[SEGURIDAD] Acceso denegado: intento de escape del workspace ({path}).")
         
     return abs_path
@@ -562,7 +574,8 @@ async def autonomous_research(query: str, max_links: int = 5) -> str:
 
     # Launch all fetches in parallel
     tasks = [_fetch_and_format(i, url) for i, url in enumerate(unique_urls)]
-    source_reports = await asyncio.gather(*tasks)
+    source_reports = await asyncio.gather(*tasks, return_exceptions=True)
+    source_reports = [r for r in source_reports if not isinstance(r, Exception)]
     
     consolidated.extend(source_reports)
     consolidated.append("\n--- FIN DE INVESTIGACION ---\n")

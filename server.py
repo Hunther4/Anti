@@ -4,14 +4,18 @@ import webbrowser
 import threading
 import uuid
 import asyncio
+import logging
 from http.server import HTTPServer, SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 # Corrected imports for the current structure
 from src.agent import AntiAgent
 from src.tools import read_file
 
-agent = AntiAgent()
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+agent = None
 active_jobs = {}
+active_jobs_lock = threading.Lock()
 
 # Load server port from config
 def _load_port():
@@ -19,7 +23,8 @@ def _load_port():
         with open("config.json") as f:
             cfg = json.load(f)
             return cfg.get("server_port", 8000)
-    except:
+    except Exception:
+        logging.exception("Failed to load server config")
         return 8000
 
 SERVER_PORT = _load_port()
@@ -40,14 +45,15 @@ def run_async(coro):
 
 
 # MCP servers storage
-MCP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memory", "mcp_servers.json")
+MCP_FILE = os.path.join(BASE_DIR, "memory", "mcp_servers.json")
 
 def load_mcps():
     if os.path.exists(MCP_FILE):
         try:
             with open(MCP_FILE, "r") as f:
                 return json.load(f)
-        except:
+        except Exception:
+            logging.exception("Failed to load MCP servers")
             return []
     return []
 
@@ -67,17 +73,19 @@ def background_agent_task(job_id, message, image_data):
         if isinstance(response_obj, str):
             response_obj = {"response": response_obj, "steps": []}
             
-        active_jobs[job_id]["status"] = "completed"
-        active_jobs[job_id]["result"] = response_obj
+        with active_jobs_lock:
+            active_jobs[job_id]["status"] = "completed"
+            active_jobs[job_id]["result"] = response_obj
     except Exception as e:
-        active_jobs[job_id]["status"] = "failed"
-        active_jobs[job_id]["error"] = str(e)
+        with active_jobs_lock:
+            active_jobs[job_id]["status"] = "failed"
+            active_jobs[job_id]["error"] = str(e)
 
 
 class APIHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         # Point to the web directory in extras/web
-        web_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "extras", "web")
+        web_dir = os.path.join(BASE_DIR, "extras", "web")
         super().__init__(*args, directory=web_dir, **kwargs)
 
     def end_headers(self):
@@ -98,15 +106,19 @@ class APIHandler(SimpleHTTPRequestHandler):
             return
 
         if path_base.startswith('/api/job/'):
-            job_id = path_base.replace('/api/job/', '')
+            job_id = path_base.replace('/api/job/', '').split('/')[0]
+            if '..' in job_id or '/' in job_id:
+                self.send_error(400, "Invalid job_id")
+                return
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
-            job = active_jobs.get(job_id, {"status": "not_found"})
+            with active_jobs_lock:
+                job = active_jobs.get(job_id, {"status": "not_found"})
             try:
                 self.wfile.write(json.dumps(job).encode('utf-8'))
-            except:
-                pass
+            except Exception:
+                logging.exception("Failed to send job response")
             return
 
         if path_base == '/api/status':
@@ -143,8 +155,8 @@ class APIHandler(SimpleHTTPRequestHandler):
                 }
                 try:
                     self.wfile.write(json.dumps(basic_status).encode('utf-8'))
-                except:
-                    pass
+                except Exception:
+                    logging.exception("Failed to send basic status")
             return
 
         elif path_base == '/api/telemetry':
@@ -175,8 +187,8 @@ class APIHandler(SimpleHTTPRequestHandler):
             except Exception as e:
                 try:
                     self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
-                except:
-                    pass
+                except Exception:
+                    logging.exception("Failed to send telemetry error")
             return
 
         elif path_base == '/api/knowledge_graph':
@@ -206,8 +218,8 @@ class APIHandler(SimpleHTTPRequestHandler):
             except Exception as e:
                 try:
                     self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
-                except:
-                    pass
+                except Exception:
+                    logging.exception("Failed to send knowledge graph error")
             return
 
         elif path_base == '/api/files':
@@ -218,8 +230,8 @@ class APIHandler(SimpleHTTPRequestHandler):
             files = agent.memory.list_workspace_files()
             try:
                 self.wfile.write(json.dumps({"files": files}).encode('utf-8'))
-            except:
-                pass
+            except Exception:
+                logging.exception("Failed to send files list")
             return
 
         elif path_base == '/api/lectura':
@@ -234,8 +246,8 @@ class APIHandler(SimpleHTTPRequestHandler):
             
             try:
                 self.wfile.write(json.dumps({"files": files}).encode('utf-8'))
-            except:
-                pass
+            except Exception:
+                logging.exception("Failed to send lectura files")
             return
 
         elif path_base == '/api/mcp':
@@ -246,12 +258,15 @@ class APIHandler(SimpleHTTPRequestHandler):
             mcp_tools = list(getattr(agent.brain, 'MCP_TOOLS', {}).keys())
             try:
                 self.wfile.write(json.dumps({"servers": [{"name": "Local Tools", "status": "online", "tools": mcp_tools}]}).encode('utf-8'))
-            except:
-                pass
+            except Exception:
+                logging.exception("Failed to send MCP tools")
             return
 
         elif path_base.startswith('/api/file/'):
-            filename = path_base.replace('/api/file/', '')
+            filename = path_base.replace('/api/file/', '').split('/')[0]
+            if '..' in filename or '/' in filename:
+                self.send_error(400, "Invalid filename")
+                return
             content = agent.memory.read_file(filename) if hasattr(agent.memory, 'read_file') else ""
             
             self.send_response(200)
@@ -259,8 +274,8 @@ class APIHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             try:
                 self.wfile.write(json.dumps({"content": content}).encode('utf-8'))
-            except:
-                pass
+            except Exception:
+                logging.exception("Failed to send file content")
             return
 
         return super().do_GET()
@@ -269,7 +284,7 @@ class APIHandler(SimpleHTTPRequestHandler):
         path_base = self.path.split('?')[0]
 
         if path_base == '/api/chat':
-            content_length = int(self.headers['Content-Length'])
+            content_length = int(self.headers.get('Content-Length', 0))
             post_data = self.rfile.read(content_length)
 
             try:
@@ -278,10 +293,11 @@ class APIHandler(SimpleHTTPRequestHandler):
                 image_data = data.get('image', None)
 
                 job_id = str(uuid.uuid4())
-                active_jobs[job_id] = {
-                    "status": "processing",
-                    "result": None
-                }
+                with active_jobs_lock:
+                    active_jobs[job_id] = {
+                        "status": "processing",
+                        "result": None
+                    }
 
                 thread = threading.Thread(target=background_agent_task, args=(job_id, message, image_data))
                 thread.daemon = True
@@ -300,7 +316,10 @@ class APIHandler(SimpleHTTPRequestHandler):
 
 
 def run_server(port=SERVER_PORT):
-    httpd = ThreadingHTTPServer(('', port), APIHandler)
+    global agent
+    if agent is None:
+        agent = AntiAgent()
+    httpd = ThreadingHTTPServer(('127.0.0.1', port), APIHandler)
     url = f"http://localhost:{port}"
     print(f"Anti Web UI: {url}")
     webbrowser.open(url)  # Auto-abrir navegador

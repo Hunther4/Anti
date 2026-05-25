@@ -25,7 +25,7 @@ class TFIDFContextRanker:
         if stopwords is None:
             self.stopwords = {
                 "el", "la", "los", "las", "un", "una", "unos", "unas", "de", "del", "al", "a", "ante",
-                "bajo", "con", "contra", "de", "desde", "en", "entre", "hacia", "hasta", "para", "por",
+                "bajo", "con", "contra", "desde", "en", "entre", "hacia", "hasta", "para", "por",
                 "segun", "sin", "sobre", "tras", "y", "o", "e", "u", "pero", "mas", "que", "como",
                 "the", "and", "of", "to", "a", "in", "for", "is", "on", "that", "by", "this", "with",
                 "i", "you", "he", "she", "it", "we", "they", "me", "him", "her", "us", "them", "che"
@@ -212,7 +212,7 @@ class MemoryManager:
 
     def save_engram(self, topic, content):
         """Guarda el engram directamente en la base de datos unificada SQLite."""
-        clean_topic = topic.lower().replace(".json", "").replace(".md", "").replace(" ", "_").replace("/", "_")
+        clean_topic = re.sub(r'[^a-zA-Z0-9_-]', '_', topic.lower())
         
         try:
             # Guardar en SQLite (Hot & Cold unificado)
@@ -235,21 +235,20 @@ class MemoryManager:
             topic: Topic/identifier for the observation (used as observation_id)
             content: Content to extract entities from
         """
-        import re
         from collections import Counter
-        
+
         # Usar el topic directamente como observation_id para consistencia
         obs_id = topic
         
         # Extraer entidades simple: palabras clave significativas
-        #过滤停用词，只保留 palabras significativas
+        # Filtrar stopwords, solo mantener palabras significativas
         STOP_WORDS = frozenset({
             "the", "is", "and", "or", "of", "to", "in", "for", "on", "at",
             "by", "an", "as", "it", "be", "do", "if", "no", "not", "are",
             "was", "were", "been", "has", "have", "had", "this", "that",
             "with", "from", "will", "can", "should", "would", "could",
             "el", "la", "los", "las", "de", "en", "un", "una", "por",
-            "para", "con", "sin", "sobre", "entre", " cuando", "donde"
+            "para", "con", "sin", "sobre", "entre", "cuando", "donde"
         })
         
         words = re.findall(r'[a-zA-Z0-9]{4,}', content.lower())
@@ -331,38 +330,67 @@ class MemoryManager:
         with open(self.usage_stats_path, "w") as f:
             json.dump(stats, f, indent=4)
 
+    def _purge_old_engrams_from_db(self, topics_to_purge: list):
+        """Elimina engrams de la base de datos SQLite por topic."""
+        if not topics_to_purge:
+            return
+        conn = self.archive._get_conn()
+        cursor = conn.cursor()
+        cursor.executemany(
+            "DELETE FROM engram_archive WHERE topic = ?",
+            [(t,) for t in topics_to_purge]
+        )
+        conn.commit()
+
     def decay_old_engrams(self, max_fallos=3):
-        """Elimina engrams que no funcionan o son muy viejos."""
-        if not os.path.exists(self.usage_stats_path): return 0
+        """Elimina engrams obsoletos de SQLite y usage_stats.json."""
+        if not os.path.exists(self.usage_stats_path):
+            return 0
         try:
             with open(self.usage_stats_path, "r") as f:
                 stats = json.load(f)
         except (json.JSONDecodeError, IOError) as e:
             app_logger.warning(f"[Memory] Error reading stats for decay: {e}")
             return 0
-            
-        deleted_count = 0
+
+        topics_to_purge = []
         for topic, stat in list(stats.items()):
             should_delete = False
             if stat.get("fallos", 0) >= max_fallos:
                 should_delete = True
-            
+
             ultimo = stat.get("ultimo_uso")
             if ultimo:
                 delta = datetime.now() - datetime.fromisoformat(ultimo)
                 if delta.days > 30:
                     should_delete = True
-                    
+
             if should_delete:
-                filename = f"{topic.lower().replace(' ', '_')}.json"
-                filepath = os.path.join(self.engrams_path, filename)
-                if os.path.exists(filepath):
-                    os.remove(filepath)
-                    deleted_count += 1
+                topics_to_purge.append(topic)
+
+        if not topics_to_purge:
+            return 0
+
+        # Purge from SQLite first; only update stats if DB operation succeeds
+        try:
+            self._purge_old_engrams_from_db(topics_to_purge)
+        except Exception as e:
+            app_logger.error(f"[Memory] Error purging engrams from DB: {e}")
+            return 0
+
+        deleted_count = 0
+        for topic in topics_to_purge:
+            if topic in stats:
                 del stats[topic]
-                
-        with open(self.usage_stats_path, "w") as f:
-            json.dump(stats, f, indent=4)
+                deleted_count += 1
+
+        try:
+            with open(self.usage_stats_path, "w") as f:
+                json.dump(stats, f, indent=4)
+        except Exception as e:
+            app_logger.error(f"[Memory] Error writing usage stats: {e}")
+            return 0
+
         return deleted_count
 
     # Phase 2.3: Access Tracking

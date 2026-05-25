@@ -111,14 +111,112 @@ Anti features native configuration support for every modern AI ecosystem:
 
 ---
 
-# Anti — Agente de Auditoría de Seguridad & DevOps (v1.5 Cósmico) 🇪🇸
+# Anti — Agente de Auditoría de Seguridad y DevOps (v1.5 Cósmico) 🇪🇸
 
-Anti es un agente de DevOps y Auditoría de Seguridad autónomo, diseñado para ejecución segura local, persistencia unificada en base de datos SQLite y optimización de contexto inteligente basada en proveedor.
-
-### 🚀 Características Clave:
-- **Lector Web Inteligente (`WEB_READ`)**: Extrae contenido web destilado en Markdown eliminando headers, footers y publicidad para no desperdiciar tokens.
-- **Historial Adaptativo**: Ventana deslizante de 10 mensajes en local para velocidad óptima de GPU, y 100 mensajes en la nube para máxima profundidad cognitiva.
-- **Memoria SQLite FTS5**: Búsquedas factuales ultra rápidas sobre la base de datos `cold_archive.db`.
+Anti es un agente autónomo de DevOps y Auditoría de Seguridad en constante evolución, diseñado para la ejecución local segura. Cuenta con persistencia unificada en SQLite FTS5, extensibilidad dinámica mediante plugins intercambiables y ventanas de contexto inteligentes adaptadas según el proveedor.
 
 ---
-**Hunther4** — *Autonomous Evolving Systems*
+
+## 💡 Arquitectura y Flujo de Ejecución
+
+```mermaid
+graph TD
+    User([Usuario]) -->|Pregunta / Comando| TUI[TUI: launcher.go]
+    TUI -->|Invocación Async| Agent[AntiAgent: agent.py]
+    Agent -->|1. Obtener Memoria Latente| Memory[(SQLite Engine: cold_archive.db)]
+    Agent -->|2. Gestión de Ventana Deslizante| ContextMgr[ContextManager]
+    ContextMgr -->|Local: 10 mensajes | LLM[Local LLM / LM Studio / Ollama]
+    ContextMgr -->|Nube: 100 mensajes| CloudLLM[Cloud LLM / Gemini / Claude]
+    LLM & CloudLLM -->|3. Bucle de Pensamiento ReAct| PluginMgr[PluginManager]
+    PluginMgr -->|Llama a los Plugins| Tools[AST_AUDIT / WEB_READ / DIFF_AUDIT]
+    Tools -->|Resultados de las Herramientas| Agent
+    Agent -->|4. PRM Scorer (50 tokens max)| LLMJudge[LLM Juez — Verificación de Calidad]
+    LLMJudge -->|Puntuación >= 0.7| Agent
+    Agent -->|Respuesta Final Destilada| TUI
+```
+
+---
+
+## ⚡ Inicio Rápido
+
+```bash
+# Clonar el repositorio con submódulos
+git clone --recursive https://github.com/Hunther4/Anti.git
+cd Anti
+
+# Instalación rápida (crea venv, instala dependencias y agrega el alias 'anti')
+chmod +x install.sh
+./install.sh
+source ~/.bashrc
+
+# Ejecutar el agente desde el menú de control
+anti
+```
+
+---
+
+## 🔌 Toolkit de Auditoría y Web (Plugins)
+
+### 🛡️ Auditor de Seguridad AST Python (`AST_AUDIT`)
+Utiliza el Árbol de Sintaxis Abstracta (`ast`) nativo de Python para realizar análisis estructural profundo de bases de código Python en milisegundos:
+- Detecta ejecuciones inseguras (`eval()`, `exec()`, `os.system()`).
+- Escaneo de secretos de alta entropía y contraseñas codificadas en el código fuente.
+- Supresiones de excepciones vacías (`except: pass`).
+
+### 🌐 Extractor Limpio de Contenido Web (`WEB_READ`) [NUEVO ⚡]
+Un raspador web altamente resistente diseñado para extraer datos factuales puros de cualquier sitio web:
+- **Eliminador de Contenido Redundante**: Omite anuncios, encabezados, pies de página y scripts usando BeautifulSoup.
+- **Conversión a Markdown**: Entrega Markdown estructurado ultra limpio para ahorrar una cantidad masiva de contexto en las instrucciones.
+- **Evasión Anti-Bot**: Encabezados aleatorios simulando navegadores reales.
+
+### 🐙 Auditor de PRs y Diffs (`DIFF_AUDIT`)
+Diseñado para inspeccionar cambios pendientes y Pull Requests en busca de vulnerabilidades:
+- Descarga dinámicamente parches/diffs desde enlaces de PRs de GitHub.
+- Escanea líneas recién agregadas (`+`) en busca de secretos, inyecciones de comandos y malas prácticas de seguridad.
+
+---
+
+## 🧠 Contexto Inteligente y Optimización Local
+
+Anti incorpora ingeniería de punta para mantener los modelos locales (como 35B MoE) extremadamente rápidos, mientras desbloquea razonamiento con contexto completo de largo alcance para APIs en la nube:
+
+### 1. Ventana Deslizante por Proveedor (`max_history_len`)
+- **Modo Local (LM Studio, Ollama)**: La ventana de historial dinámico se limita a **10 mensajes (5 turnos)**. Mantiene pequeños los tokens de las instrucciones, ahorra VRAM y logra generación local ultrarrápida.
+- **Modo Nube (Claude, Gemini, OpenAI)**: Expande el historial automáticamente a **100 mensajes (50 turnos)**, aprovechando ventanas de contexto de 1M+ tokens para resolver tareas complejas de auditoría en múltiples capas.
+
+### 2. Puntuador de Modelo de Recompensa de Proceso (PRM)
+- Evalúa la calidad de la respuesta en tiempo real.
+- **Optimización de Latencia Cero**: Las instrucciones se restringen para emitir solo la etiqueta de calificación (`Score: 1/0/-1`) con un límite máximo estricto de **50 tokens**, eliminando por completo la sobrecarga de razonamiento durante la evaluación.
+- Se puede activar o desactivar mediante `"enable_prm_scorer"` en `config.json` para máxima velocidad de ejecución directa.
+
+---
+
+## 🔌 Matriz de 9 Proveedores de IA Compatibles
+
+Anti cuenta con soporte de configuración nativa para todos los ecosistemas modernos de IA:
+
+| Proveedor | Tipo | Configuración de Clave de API | Modelos Principales |
+| :--- | :---: | :---: | :--- |
+| **LM Studio** | Local | *Ninguna* | `Qwen 2.5 35B MoE`, `Llama 3 8B` |
+| **Ollama** | Local | *Ninguna* | `mistral`, `codellama`, `deepseek-coder` |
+| **OpenAI** | Nube | `OpenAI Key` | `gpt-4o`, `gpt-4-turbo` |
+| **Gemini (Google)** | Nube | `Gemini Key` | `gemini-1.5-pro`, `gemini-1.5-flash` |
+| **Claude (Anthropic)** | Nube | `Anthropic Key` | `claude-3-5-sonnet`, `claude-3-haiku` |
+| **DeepSeek** | Nube | `DeepSeek Key` | `deepseek-chat`, `deepseek-coder` |
+| **Minimax** | Nube | `Minimax Key` | `abab6.5g-chat` |
+| **OpenAI Compatible** | Híbrido | `OpenAI Comp Key` | *Custom / Groq / Together AI* |
+
+---
+
+## 🤝 Referencia de Comandos CLI
+
+| Comando | Descripción |
+| :--- | :--- |
+| `status` | Matriz de integridad del sistema, demonio Docker y verificación de memoria SQLite |
+| `reflect` | Activa un ciclo de Evolución Dual, compactando engramas y actualizando habilidades conductuales |
+| `consolidate` | Activa el mantenimiento de memoria en segundo plano (fusión de nodos de entidades y poda de datos envejecidos) |
+| `reasoner` | Activa o desactiva la capa de razonamiento de autocrítica dinámica para depuración compleja |
+
+---
+
+**Hunther4** — *Sistemas Autónomos en Evolución*

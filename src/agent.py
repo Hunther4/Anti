@@ -4,7 +4,6 @@ import re
 import asyncio
 import logging
 import subprocess
-from datetime import datetime
 
 from src.logger import AppLogger, Colors
 
@@ -18,7 +17,6 @@ from src.scorer import PRMScorer
 from src.evolver import SkillEvolver
 from src.consolidator import MemoryConsolidator
 from src.tools import duckduckgo_search, fetch_url_text, autonomous_research, write_file, read_file, run_local_command
-from src.document_parser import parse_document
 from prompts.system import build_system_prompt
 from prompts.templates import REASONER_PROMPT, REFLECT_PROMPT, COMPACT_PROMPT, IMPORTANCE_PROMPT
 
@@ -32,6 +30,8 @@ def print_header(name="ANTI-AGENT"):
 
 
 class AntiAgent:
+    DEFAULT_LM_URL = "http://127.0.0.1:1234/v1"
+
     def __init__(self):
         self.base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -55,13 +55,13 @@ class AntiAgent:
                 logger.warning(f"Auto-detección falló: {e}. Usando LM Studio por defecto.")
                 self.brain = create_provider(
                     "lmstudio",
-                    base_url=self.config.get("lm_studio_url", "http://127.0.0.1:1234/v1"),
+                    base_url=self.config.get("lm_studio_url", self.DEFAULT_LM_URL),
                     model=self.config.get("model")
                 )
         else:
             # Proveedor específico
             url_config = self.config.get(f"{provider_type}_url", 
-                          self.config.get("lm_studio_url", "http://127.0.0.1:1234/v1"))
+                          self.config.get("lm_studio_url", self.DEFAULT_LM_URL))
             api_key = self.config.get(f"{provider_type}_api_key")
             self.brain = create_provider(
                 provider_type,
@@ -88,7 +88,7 @@ class AntiAgent:
         self.reasoner_mode = False
 
         # Autonomous Components
-        url = self.config.get("lm_studio_url", "http://127.0.0.1:1234/v1")
+        url = self.config.get("lm_studio_url", self.DEFAULT_LM_URL)
         self.scorer = PRMScorer(prm_url=url, prm_model=self.brain.model)
         self.evolver = SkillEvolver(base_url=url, model="local-model")
         
@@ -235,7 +235,7 @@ class AntiAgent:
 
         # Connection check
         if not asyncio.run(self.brain.check_connection()):
-            url = self.config.get("lm_studio_url", "http://127.0.0.1:1234/v1")
+            url = self.config.get("lm_studio_url", self.DEFAULT_LM_URL)
             print(f"{Colors.YELLOW}[!] Advertencia: No se pudo conectar con el proveedor seleccionado.{Colors.END}")
             print(f"{Colors.YELLOW}    Asegurate de que el servidor local o tu API key esten configurados.{Colors.END}\n")
 
@@ -263,8 +263,16 @@ class AntiAgent:
                     else:
                         print(f"\n{self.render_markdown(str(result))}\n")
             except KeyboardInterrupt:
-                print(f"\n\n{Colors.BLUE}[*] Interrupción de teclado detectada. Saliendo...{Colors.END}\n")
+                print(f"\n{Colors.YELLOW}[!] Interrumpido por el usuario.{Colors.END}")
+                self.is_running = False
                 break
+            except EOFError:
+                print(f"\n{Colors.YELLOW}[!] EOF recibido. Saliendo...{Colors.END}")
+                self.is_running = False
+                break
+            except Exception as e:
+                app_logger.exception(f"Error en CLI loop")
+                print(f"\n{Colors.RED}[!] Error: {e}{Colors.END}")
 
     # --- Command Handler ---
 
@@ -398,7 +406,7 @@ class AntiAgent:
             self.brain.record_usage(usage)
             prompt_tokens = usage.get("prompt_tokens", 0)
             self.context_mgr.token_count = prompt_tokens
-        except Exception as e:
+        except (ConnectionError, TimeoutError, ValueError) as e:
             app_logger.exception(f"Chat inference failed")
             return {
                 "response": f"Error en inferencia: {e}",
@@ -445,7 +453,11 @@ class AntiAgent:
                     print(f"{Colors.YELLOW}[*] [{tool_step+1}/{MAX_TOOL_STEPS}] {tool_name}: {raw_args[:50]}...{Colors.END}")
                     
                     # Execute dynamically
-                    result = await self.plugin_manager.execute_tool(tool_name, raw_args)
+                    try:
+                        result = await self.plugin_manager.execute_tool(tool_name, raw_args)
+                    except Exception as e:
+                        app_logger.exception(f"Tool execution failed: {tool_name}")
+                        result = f"[ERROR] La herramienta {tool_name} falló: {e}"
                     
                     tool_triggered = True
                     current_step.update({"tool": tool_name, "query": raw_args, "result_summary": str(result)[:200] + "..."})
@@ -486,11 +498,16 @@ class AntiAgent:
             messages.append({"role": "assistant", "content": response})
             messages.append({"role": "user", "content": tool_context})
             print(f"{Colors.CYAN}[*] Procesando resultado de herramienta...{Colors.END}")
-            response, usage = await self.brain.chat(messages)
-            self.brain.record_usage(usage)
-            prompt_tokens = usage.get("prompt_tokens", 0)
-            self.context_mgr.token_count = prompt_tokens
-            response = response.replace("<thought>", "").replace("</thought>", "").strip()
+            try:
+                response, usage = await self.brain.chat(messages)
+                self.brain.record_usage(usage)
+                prompt_tokens = usage.get("prompt_tokens", 0)
+                self.context_mgr.token_count = prompt_tokens
+                response = response.replace("<thought>", "").replace("</thought>", "").strip()
+            except Exception as e:
+                app_logger.exception(f"Chat inference failed in tool loop")
+                response += f"\n\n[Error al procesar herramienta: {e}]"
+                break
             tool_step += 1
 
         # Reasoner mode: self-critique
@@ -626,16 +643,18 @@ class AntiAgent:
         print(f"{Colors.BLUE}[*] Iniciando ciclo de renovación...{Colors.END}")
         try:
             # Matar servidor existente
-            subprocess.run(["pkill", "-f", "server.py"], capture_output=True)
+            subprocess.run(["pkill", "-f", f"python.*{os.path.join(self.base_dir, 'server.py')}"], capture_output=True)
             print(f"{Colors.BLUE}[*] Servidores previos detenidos.{Colors.END}")
             
             # Iniciar nuevo servidor en segundo plano
             # Usamos el python del venv si existe, sino el del sistema
             python_exe = "python3"
-            if os.path.exists("venv/bin/python3"):
-                python_exe = "venv/bin/python3"
+            venv_python = os.path.join(self.base_dir, "venv/bin/python3")
+            if os.path.exists(venv_python):
+                python_exe = venv_python
             
-            subprocess.Popen([python_exe, "server.py"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            server_script = os.path.join(self.base_dir, "server.py")
+            subprocess.Popen([python_exe, server_script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             print(f"{Colors.GREEN}[+] Nuevo servidor iniciado con el código actualizado.{Colors.END}")
             
             # Pequeña pausa para asegurar el arranque
@@ -861,7 +880,7 @@ class AntiAgent:
     def _mcp_install(self, mcp_id):
         """Instala un MCP (download + save)."""
         # Sanitize ID for folder name
-        safe_id = re.sub(r'[^a-zA-Z0-9_-]', '-', mcp_id.lower())
+        safe_id = re.sub(r'[^a-zA-Z0-9_-]', '', mcp_id.lower()) or "unnamed-mcp"
         skills_dir = os.path.join(self.base_dir, "memory", "skills")
         
         # Check if already exists
@@ -871,7 +890,6 @@ class AntiAgent:
         
         # Create MCP directory with template SKILL.md
         mcp_dir = os.path.join(skills_dir, safe_id)
-        os.makedirs(mcp_dir, exist_ok=True)
         
         skill_path = os.path.join(mcp_dir, "SKILL.md")
         template = f"""---
@@ -895,7 +913,9 @@ Contenido del MCP instalado. Editar este archivo para personalizar el comportami
 
     def _mcp_remove(self, mcp_id):
         """Remueve un MCP."""
-        safe_id = re.sub(r'[^a-zA-Z0-9_-]', '-', mcp_id.lower())
+        safe_id = re.sub(r'[^a-zA-Z0-9_-]', '', mcp_id.lower()) or "unnamed-mcp"
+        if not safe_id:
+            return "[ERROR] Invalid MCP ID"
         skills_dir = os.path.join(self.base_dir, "memory", "skills")
         mcp_dir = os.path.join(skills_dir, safe_id)
         
