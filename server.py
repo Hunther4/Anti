@@ -13,6 +13,17 @@ from src.tools import read_file
 agent = AntiAgent()
 active_jobs = {}
 
+# Load server port from config
+def _load_port():
+    try:
+        with open("config.json") as f:
+            cfg = json.load(f)
+            return cfg.get("server_port", 8000)
+    except:
+        return 8000
+
+SERVER_PORT = _load_port()
+
 # Thread-safe persistent event loop for multithreaded asyncio execution
 LOOP = asyncio.new_event_loop()
 
@@ -288,7 +299,7 @@ class APIHandler(SimpleHTTPRequestHandler):
             return
 
 
-def run_server(port=8000):
+def run_server(port=SERVER_PORT):
     httpd = ThreadingHTTPServer(('', port), APIHandler)
     url = f"http://localhost:{port}"
     print(f"Anti Web UI: {url}")

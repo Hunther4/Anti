@@ -11,6 +11,7 @@
   "auto_reflect_every_n_tasks": 5,
   "report_format": "Vane Style",
   "enable_prm_scorer": true,
+  "server_port": 8001,
   "max_history_len_local": 10,
   "max_history_len_cloud": 100
 }
