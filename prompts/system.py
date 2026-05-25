@@ -12,6 +12,10 @@ def build_system_prompt(name: str, personality: str, omni_context: str = "", dyn
     evolution_rules = ""
     if omni_context and "No hay contexto latente" not in omni_context:
         evolution_rules = f"=== MEMORIA LATENTE E INSTRUCCIONES INYECTADAS ===\n{omni_context}\n==================================================\n"
+    
+    # Escape curly braces in injected content to prevent .format() crashes
+    evolution_rules = evolution_rules.replace("{", "{{").replace("}", "}}")
+    dynamic_tools = dynamic_tools.replace("{", "{{").replace("}", "}}")
 
     now = datetime.now()
     meses = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
