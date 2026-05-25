@@ -302,8 +302,8 @@ class APIHandler(SimpleHTTPRequestHandler):
 def run_server(port=SERVER_PORT):
     httpd = ThreadingHTTPServer(('', port), APIHandler)
     url = f"http://localhost:{port}"
-    print(f"Anti Web UI: {url}")
-    webbrowser.open(url) # Uncomment if you want auto-open
+    print(f"Anti Web UI: http://localhost:{port}")
+    # webbrowser.open(url)  # Deshabilitado: no abrir navegador automáticamente
 
     try:
         httpd.serve_forever()
