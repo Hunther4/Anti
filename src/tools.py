@@ -208,7 +208,7 @@ def duckduckgo_search(query: str, max_results: int = 5, time_period: str = None)
                     entry = f"[Fuente {i+1}] {title}\n   URL: {url}"
                     if content:
                         content = re.sub(r'<[^>]+>', '', content).strip()
-                        entry += f"\n   Resumen: {content}"
+                        entry += f"\n   Vista previa (usa WEB_READ en la URL para leer el contenido completo): {content}"
                     if engine:
                         entry += f"\n   Fuente Original: {engine}"
                     output.append(entry)
@@ -245,7 +245,7 @@ def duckduckgo_search(query: str, max_results: int = 5, time_period: str = None)
 
             output = [f"Resultados (DuckDuckGo) para: '{query}'\n"]
             if abstract:
-                output.append(f"RESUMEN DIRECTO: {abstract}\n   URL: {abstract_url}")
+                output.append(f"DIRECTO: {abstract}\n   URL: {abstract_url}")
             for i, item in enumerate(related[:max_results]):
                 text = item.get("Text", "")
                 link = item.get("FirstURL", "")
@@ -298,7 +298,7 @@ def duckduckgo_search(query: str, max_results: int = 5, time_period: str = None)
 
             entry = f"[Fuente {i+1}] {title}\n   URL: {link}"
             if snippet:
-                entry += f"\n   Resumen: {snippet}"
+                entry += f"\n   Snippet (usa WEB_READ en la URL para leer completo): {snippet}"
             output.append(entry)
 
         final_output = "\n\n".join(output)
@@ -365,7 +365,7 @@ def google_search(query: str, max_results: int = 5, time_period: str = None) -> 
             
             entry = f"[Fuente {i+1}] {title}\n   URL: {link}"
             if snippet:
-                entry += f"\n   Resumen: {snippet}"
+                entry += f"\n   Snippet (usa WEB_READ en la URL para leer completo): {snippet}"
             output.append(entry)
 
         final_output = "\n\n".join(output)
