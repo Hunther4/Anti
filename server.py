@@ -1,5 +1,6 @@
 import os
 import json
+import webbrowser
 import threading
 import uuid
 import asyncio
@@ -301,8 +302,8 @@ class APIHandler(SimpleHTTPRequestHandler):
 def run_server(port=SERVER_PORT):
     httpd = ThreadingHTTPServer(('', port), APIHandler)
     url = f"http://localhost:{port}"
-    print(f"Anti Web UI: http://localhost:{port}")
-    # webbrowser.open(url)  # Deshabilitado: no abrir navegador automáticamente
+    print(f"Anti Web UI: {url}")
+    webbrowser.open(url)  # Auto-abrir navegador
 
     try:
         httpd.serve_forever()
