@@ -66,6 +66,28 @@ new file mode 100644
     def test_plugin_loading(self):
         self.assertIn("AST_AUDIT", self.pm.tools)
         self.assertIn("DIFF_AUDIT", self.pm.tools)
+        self.assertIn("WEB_READ", self.pm.tools)
+
+    async def test_web_read_cleaner(self):
+        from src.plugins.web_reader import clean_html_content
+        sample_html = """
+        <html>
+          <head><title>Test Title</title></head>
+          <body>
+            <nav>Redundant navigation menu</nav>
+            <main>
+              <h1>Main Article Title</h1>
+              <p>This is the core content body that we want to keep.</p>
+            </main>
+            <footer>Redundant footer elements</footer>
+          </body>
+        </html>
+        """
+        cleaned = clean_html_content(sample_html)
+        self.assertIn("Main Article Title", cleaned)
+        self.assertIn("This is the core content body", cleaned)
+        self.assertNotIn("navigation menu", cleaned)
+        self.assertNotIn("footer elements", cleaned)
 
     async def test_ast_audit_findings(self):
         result = await self.pm.execute_tool("AST_AUDIT", "vuln_test.py")

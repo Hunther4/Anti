@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Anti-Agent Dashboard</title>
+    <title>Anti-Agent Cosmic Commander</title>
     <link rel="stylesheet" href="style.css">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
@@ -12,27 +12,38 @@
     <script>mermaid.initialize({ startOnLoad: false, theme: 'dark', fontFamily: 'Outfit' });</script>
 </head>
 <body>
+    <!-- Overlay de Rejilla Digital y Escáner Activo de Fondo -->
+    <div class="cyber-grid"></div>
+    <div class="cosmic-nebula nebula-cyan"></div>
+    <div class="cosmic-nebula nebula-magenta"></div>
+
     <div class="app-container">
         <!-- Panel Izquierdo: Workspace y Memoria -->
-        <aside class="sidebar left-sidebar glass">
+        <aside class="sidebar left-sidebar glass hud-panel">
+            <div class="hud-corners"></div>
             <h2>📁 Sistema de Archivos</h2>
+            <div class="hud-sub">// MODULE: WORKSPACE_SCANNER [LOC: 0x4B9E]</div>
+            
             <ul id="file-list" class="list">
                 <li class="loading">Iniciando escaneo...</li>
             </ul>
             
             <h2 class="mt">🧠 Memoria & Engrams</h2>
+            <div class="hud-sub">// MODULE: COGNITIVE_RELATIONS [LOC: 0x1A8C]</div>
             <div class="stat-box">
                 <span id="engrams-count">0</span>
                 Bloques de Conocimiento
             </div>
 
             <h2 class="mt">⚙️ Procesos Autónomos</h2>
+            <div class="hud-sub">// MODULE: BACKGROUND_TELEMETRY [LOC: 0x8D2F]</div>
             <ul id="background-tasks" class="list">
-                <li><span style="color:var(--accent-cyan)">●</span> PRM Scorer (Activo)</li>
-                <li><span style="color:var(--accent-cyan)">●</span> Skill Evolver (Activo)</li>
+                <li><span style="color:var(--accent-cyan); text-shadow: var(--glow-cyan)">●</span> PRM Scorer (Activo)</li>
+                <li><span style="color:var(--accent-cyan); text-shadow: var(--glow-cyan)">●</span> Skill Evolver (Activo)</li>
             </ul>
 
             <h2 class="mt">📚 Lectura</h2>
+            <div class="hud-sub">// MODULE: CHUNK_READER_OVERLAP [LOC: 0x3F6A]</div>
             <div id="lectura-drop-zone" class="lectura-drop-zone">
                 <span>Arrastrá un archivo aquí o hacé clic para subir</span>
                 <input type="file" id="lectura-file-input" accept=".txt,.md,.pdf,.py,.js,.json,.csv" hidden>
@@ -42,6 +53,7 @@
             </ul>
             
             <h2 class="mt">🔌 MCP Servers</h2>
+            <div class="hud-sub">// MODULE: INTERFACE_PROTOCOLS [LOC: 0x7E1D]</div>
             <div id="mcp-list" class="list">
                 <li style="color:var(--text-secondary);font-size:12px;padding:8px">Sin servers MCP</li>
             </div>
@@ -53,6 +65,7 @@
             <!-- Modal para agregar MCP -->
             <div id="mcp-modal" class="modal hidden">
                 <div class="modal-content glass">
+                    <div class="hud-corners"></div>
                     <h3>Agregar Server MCP</h3>
                     <input type="text" id="mcp-url-input" placeholder="URL del server (e.g. http://localhost:3000)" />
                     <input type="text" id="mcp-name-input" placeholder="Nombre (opcional)" />
@@ -65,9 +78,13 @@
         </aside>
 
         <!-- Panel Central: Chat -->
-        <main class="chat-container glass">
+        <main class="chat-container glass hud-panel">
+            <div class="hud-corners"></div>
             <header class="chat-header">
-                <h1 id="agent-name-display">Anti-Agent</h1>
+                <div>
+                    <h1 id="agent-name-display">Anti-Agent</h1>
+                    <div class="hud-sub" style="margin-top: 2px;">[SYS_CORE: 0x9A4F] // COGNITIVE_NEURAL_LINK</div>
+                </div>
                 <div class="header-status">
                     <div id="status-indicator" class="status offline">Desconectado</div>
                     <div id="reasoner-badge" class="badge reasoner-off">Reasoner: OFF</div>
@@ -75,8 +92,11 @@
             </header>
             
             <div id="chat-box" class="chat-box">
+                <!-- Línea láser de escaneo animada -->
+                <div class="scanning-laser"></div>
+                
                 <div class="message system">
-                    [SYSTEM_INIT] Anti-Agent Core v2.0 cargado.<br>
+                    [SYSTEM_INIT] Anti-Agent Core v3.0 cargado.<br>
                     > Soporte de Visión: Activo<br>
                     > Renderizado de Diagramas: Activo<br>
                     > Scorer & Evolver: Online y a la escucha.
@@ -100,6 +120,46 @@
                 </button>
             </div>
         </main>
+
+        <!-- Panel Derecho: Telemetría & Grafo de Conocimiento -->
+        <aside class="sidebar right-sidebar glass hud-panel">
+            <div class="hud-corners"></div>
+            <h2>📊 Telemetría en Caliente</h2>
+            <div class="hud-sub">// MODULE: CORE_DIAGNOSTICS [LOC: 0x5C2E]</div>
+            
+            <div class="telemetry-grid">
+                <div class="telemetry-card">
+                    <div class="tel-label">TPS Promedio</div>
+                    <div class="tel-value" id="tel-tps">0.0</div>
+                </div>
+                <div class="telemetry-card">
+                    <div class="tel-label">Hit Ratio Caché</div>
+                    <div class="tel-value" id="tel-cache">0%</div>
+                </div>
+                <div class="telemetry-card">
+                    <div class="tel-label">Contexto Usado</div>
+                    <div class="tel-value" id="tel-context">0%</div>
+                </div>
+                <div class="telemetry-card">
+                    <div class="tel-label">Habilidades (Skills)</div>
+                    <div class="tel-value" id="tel-skills">0</div>
+                </div>
+            </div>
+
+            <h2 class="mt">🕸️ Grafo de Conocimiento</h2>
+            <div class="hud-sub">// MODULE: COGNITIVE_GRAPH [LOC: 0x2D7B]</div>
+            
+            <div class="graph-wrapper">
+                <div id="graph-loader" class="graph-loader">Generando mapa relacional...</div>
+                <div id="mermaid-graph-container" class="mermaid-graph-container">
+                    <!-- Mermaid diagram content injected here -->
+                </div>
+            </div>
+            <button id="refresh-graph-btn" class="secondary-btn" style="margin-top: 12px; width: 100%;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;margin-right:6px"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+                Actualizar Grafo
+            </button>
+        </aside>
     </div>
     
     <script src="app_v3.js"></script>

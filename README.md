@@ -1,10 +1,31 @@
-# Anti — Autonomous DevOps & Security Auditor Agent (v1.0 Cosmic) 🚀
+# Anti — Autonomous DevOps & Security Auditor Agent (v1.5 Cosmic) 🚀
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
+[![Go](https://img.shields.io/badge/Go-1.20+-00ADD8.svg)](https://go.dev/)
 [![Docker](https://img.shields.io/badge/Docker-Sandboxed-blue.svg)](https://www.docker.com/)
 
-Anti is an autonomous, self-evolving DevOps and Security Auditor Agent designed for secure, local-first execution with unified SQLite memory and plug-and-play dynamic extensibility.
+Anti is an autonomous, self-evolving DevOps and Security Auditor Agent designed for secure, local-first execution with unified SQLite FTS5 memory, plug-and-play dynamic extensibility, and highly optimized, provider-aware context windows.
+
+---
+
+## 💡 Architecture & Execution Flow
+
+```mermaid
+graph TD
+    User([Usuario]) -->|Pregunta / Comando| TUI[TUI: launcher.go]
+    TUI -->|Invocación Async| Agent[AntiAgent: agent.py]
+    Agent -->|1. Obtiene Memoria Latente| Memory[(SQLite Engine: cold_archive.db)]
+    Agent -->|2. Gestión de Ventana Deslizante| ContextMgr[ContextManager]
+    ContextMgr -->|Local: 10 msgs | LLM[Local LLM / LM Studio / Ollama]
+    ContextMgr -->|Nube: 100 msgs| CloudLLM[Cloud LLM / Gemini / Claude]
+    LLM & CloudLLM -->|3. Loop de Pensamiento ReAct| PluginMgr[PluginManager]
+    PluginMgr -->|Llama Plugins| Tools[AST_AUDIT / WEB_READ / DIFF_AUDIT]
+    Tools -->|Resultados de Herramienta| Agent
+    Agent -->|4. PRM Scorer (50 tokens max)| LLMJudge[LLM Juez Quality Check]
+    LLMJudge -->|Score >= 0.7| Agent
+    Agent -->|Respuesta Final Destilada| TUI
+```
 
 ---
 
@@ -26,42 +47,7 @@ anti
 
 ---
 
-## 🛠️ Cosmic Architecture (v1.0)
-
-Anti has evolved from a standard ReAct conversational assistant into an extensible, fully sandboxed auditing platform.
-
-```text
-Anti/
-├── src/
-│   ├── plugins/        # 🔌 Plug & Play Dynamic Python Plugins
-│   │   ├── core_tools.py
-│   │   ├── ast_security_auditor.py
-│   │   └── github_diff_auditor.py
-│   ├── plugin_manager.py# Dynamic import & registry logic
-│   ├── agent.py        # Generic decoupled ReAct Loop
-│   ├── archive.py      # Unified SQLite Knowledge Graph & FTS5 search
-│   └── memory.py       # Memory persistence layer
-├── memory/
-│   └── cold_archive.db # Single source of truth (SQLite)
-├── workspace/          # Sandboxed working directory
-└── tests/              # Unit test suites
-```
-
-### 1. Unified SQLite FTS5 Memory Engine
-- **Single Source of Truth**: Multi-file JSON memory is deprecated. All Engrams, structural entities, logs, and relationships are stored in `memory/cold_archive.db`.
-- **Full-Text Search (FTS5)**: Integrated native SQLite virtual tables and real-time triggers (`engram_ai`, `engram_ad`, `engram_au`) to achieve sub-millisecond keyword and semantic search queries over thousands of memory records.
-
-### 2. Plug & Play Dynamic Python Plugins
-- **Decoupled ReAct Loop**: No more hardcoded tool chains or endless `if/elif` blocks in `agent.py`. The agent matches `[TOOL_NAME: arguments]` patterns dynamically.
-- **Dynamic Imports**: Any Python script dropped inside `src/plugins/` using the `@anti_tool` decorator automatically exposes its capabilities to the LLM's system prompt on startup.
-
-### 3. Docker Sandboxing & Execution Security
-- **Command Sandboxing**: Shell commands run inside an isolated `python:3.12-slim` Docker container. The local workspace directory is mounted safely.
-- **Local Fallback Policies**: In case Docker is unavailable, a strict security policy filters chaining operators (`&&`, `;`, `||`, etc.) and blacklisted commands.
-
----
-
-## 🔌 Standard Auditing Toolkit (New Plugins)
+## 🔌 Core Auditing & Web Toolkit (Plugins)
 
 ### 🛡️ AST Python Security Auditor (`AST_AUDIT`)
 Uses Python's native Abstract Syntax Tree (`ast`) to perform deep structural analysis of Python codebases in milliseconds:
@@ -69,17 +55,55 @@ Uses Python's native Abstract Syntax Tree (`ast`) to perform deep structural ana
 - High-entropy secrets and hardcoded password scanning.
 - Empty exception handling suppressions (`except: pass`).
 
+### 🌐 Clean Web Content Scraper (`WEB_READ`) [NEW ⚡]
+A highly resilient Web Scraper designed to extract pure factual data from any website:
+- **Boilerplate Stripper**: Bypasses ads, headers, footers, and scripts using BeautifulSoup.
+- **Markdown Conversion**: Delivers ultra-clean, structured Markdown to save massive prompt context.
+- **Anti-Bot Bypass**: Randomized headers simulating real browsers.
+
 ### 🐙 PR & Diff Auditor (`DIFF_AUDIT`)
 Designed to inspect pending changes and Pull Requests for vulnerabilities:
 - Downloads raw patches/diffs dynamically from GitHub PR links.
-- Scans newly added lines (`+`) for secrets, shell command injections, and bad security practices.
+- Scans newly added lines (`+`) for secrets, command injections, and bad security practices.
+
+---
+
+## 🧠 Smart Context & Local-First Optimization
+
+Anti incorporates state-of-the-art engineering to keep local models (like 35B MoE) extremely fast while unlocking full long-context reasoning for cloud APIs:
+
+### 1. Provider-Aware Sliding Window (`max_history_len`)
+- **Local Mode (LM Studio, Ollama)**: Dynamic history window is restricted to **10 messages (5 turns)**. Keeps prompt tokens small, saves VRAM, and achieves lightning-fast local generation.
+- **Cloud Mode (Claude, Gemini, OpenAI)**: Expands history automatically to **100 messages (50 turns)**, leveraging 1M+ token context windows to solve complex, multi-layered auditing tasks.
+
+### 2. Process Reward Model Scorer (PRM)
+- Evaluates response quality in real-time.
+- **Latence-Zero Optimization**: Prompt instructions are restricted to output only the rating tag (`Score: 1/0/-1`) with a strict maximum limit of **50 tokens**, completely eliminating thinking/reasoning overhead during evaluation.
+- Toggleable via `"enable_prm_scorer"` in `config.json` for ultimate direct execution speed.
+
+---
+
+## 🔌 9 Supported AI Providers Matrix
+
+Anti features native configuration support for every modern AI ecosystem:
+
+| Provider | Type | API Key Config | Primary Models |
+| :--- | :---: | :---: | :--- |
+| **LM Studio** | Local | *None* | `Qwen 2.5 35B MoE`, `Llama 3 8B` |
+| **Ollama** | Local | *None* | `mistral`, `codellama`, `deepseek-coder` |
+| **OpenAI** | Cloud | `OpenAI Key` | `gpt-4o`, `gpt-4-turbo` |
+| **Gemini (Google)** | Cloud | `Gemini Key` | `gemini-1.5-pro`, `gemini-1.5-flash` |
+| **Claude (Anthropic)** | Cloud | `Anthropic Key` | `claude-3-5-sonnet`, `claude-3-haiku` |
+| **DeepSeek** | Cloud | `DeepSeek Key` | `deepseek-chat`, `deepseek-coder` |
+| **Minimax** | Cloud | `Minimax Key` | `abab6.5g-chat` |
+| **OpenAI Compatible** | Hybrid | `OpenAI Comp Key` | *Custom / Groq / Together AI* |
 
 ---
 
 ## 🤝 CLI Command Reference
 
 | Command | Description |
-|:--------|:-----------|
+| :--- | :--- |
 | `status` | System integrity matrix, Docker daemon, and SQLite memory checks |
 | `reflect` | Triggers a Dual Evolution cycle, compacting engrams and updating behavioral skills |
 | `consolidate` | Triggers background memory maintenance (merging entity nodes and pruning decay) |
@@ -87,26 +111,14 @@ Designed to inspect pending changes and Pull Requests for vulnerabilities:
 
 ---
 
-## 🤝 Contributing
+# Anti — Agente de Auditoría de Seguridad & DevOps (v1.5 Cósmico) 🇪🇸
 
-We follow a strict **issue-first** workflow. Please open a discussion issue before submitting a PR.
+Anti es un agente de DevOps y Auditoría de Seguridad autónomo, diseñado para ejecución segura local, persistencia unificada en base de datos SQLite y optimización de contexto inteligente basada en proveedor.
 
-1. Fork the repository.
-2. Create your feature branch (`git checkout -b feature/MyAwesomePlugin`).
-3. Decorate your tool using `@anti_tool` inside `src/plugins/`.
-4. Run tests: `python3 -m unittest discover tests/`
-5. Open a Pull Request.
-
----
-
-# Anti — Agente de Auditoría de Seguridad & DevOps (v1.0 Cósmico) 🇪🇸
-
-Anti es un agente de DevOps y Auditoría de Seguridad autónomo, diseñado para ejecución segura local, persistencia unificada en base de datos SQLite y extensibilidad dinámica "Plug and Play".
-
-## 🛠️ Arquitectura Cósmica
-- **Memoria Unificada SQLite FTS5**: Deprecamos la persistencia en múltiples JSONs. Toda la memoria se archiva en una base de datos central de alto rendimiento utilizando índices inversos FTS5.
-- **Plugins Dinámicos**: Olvidate de modificar el core del agente. Decorá cualquier función con `@anti_tool` dentro de `/src/plugins/` y Anti aprenderá a usarla de inmediato.
-- **Auditoría AST y de Diffs**: Equipado de fábrica con escáneres estáticos de código (`AST_AUDIT`) e inspectores automatizados de Pull Requests (`DIFF_AUDIT`).
+### 🚀 Características Clave:
+- **Lector Web Inteligente (`WEB_READ`)**: Extrae contenido web destilado en Markdown eliminando headers, footers y publicidad para no desperdiciar tokens.
+- **Historial Adaptativo**: Ventana deslizante de 10 mensajes en local para velocidad óptima de GPU, y 100 mensajes en la nube para máxima profundidad cognitiva.
+- **Memoria SQLite FTS5**: Búsquedas factuales ultra rápidas sobre la base de datos `cold_archive.db`.
 
 ---
 **Hunther4** — *Autonomous Evolving Systems*

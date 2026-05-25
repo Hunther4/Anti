@@ -11,8 +11,54 @@ Este archivo contiene todas las mejoras:
 import re
 import os
 import json
+import asyncio
+import logging
+import requests
 from typing import Optional, Callable, List, Dict
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
+# === Optional: TF-IDF / Cosine Similarity dependencies ===
+_HAS_SKLEARN = False
+_TFIDF_VECTORIZER = None
+
+try:
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
+    _HAS_SKLEARN = True
+except ImportError:
+    TfidfVectorizer = None
+    cosine_similarity = None
+
+# === Optional: SentenceTransformer (preferred, but heavy) ===
+_HAS_SENTENCE_TRANSFORMER = False
+_SENTENCE_MODEL = None
+
+try:
+    from sentence_transformers import SentenceTransformer
+    _HAS_SENTENCE_TRANSFORMER = True
+except ImportError:
+    SentenceTransformer = None
+
+
+def _get_embedding_model():
+    """Lazy-load the embedding model — SentenceTransformer preferred, TF-IDF fallback."""
+    global _SENTENCE_MODEL, _TFIDF_VECTORIZER
+    if _HAS_SENTENCE_TRANSFORMER and _SENTENCE_MODEL is None:
+        try:
+            _SENTENCE_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
+            logger.info("Using SentenceTransformer 'all-MiniLM-L6-v2' for embeddings.")
+        except Exception as e:
+            logger.warning(f"Failed to load SentenceTransformer: {e}")
+
+    if _SENTENCE_MODEL is not None:
+        return "sentence_transformer", _SENTENCE_MODEL
+
+    if _TFIDF_VECTORIZER is None and _HAS_SKLEARN:
+        _TFIDF_VECTORIZER = TfidfVectorizer(stop_words="english", max_features=5000)
+
+    return "tfidf", _TFIDF_VECTORIZER
 
 
 class HybridCompactor:
@@ -98,11 +144,58 @@ class HybridCompactor:
         
         return result
     
+    # ==================== SPRINT 3: LLM-BASED SUMMARY ====================
+    
+    def _call_llm(self, prompt: str, max_tokens: int = 256) -> Optional[str]:
+        """Call a local LLM via HTTP endpoint (LM Studio / LocalAI compatible)."""
+        base_url = self.config.get("llm_base_url", "http://127.0.0.1:1234/v1")
+        model = self.config.get("llm_model", "local-model")
+        url = f"{base_url.rstrip('/')}/chat/completions"
+        
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": 0.3,
+        }
+        
+        try:
+            resp = requests.post(url, json=payload, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            content = data["choices"][0]["message"]["content"]
+            return content.strip()
+        except Exception as e:
+            logger.warning(f"[Compactor] LLM summary call failed: {e}")
+            return None
+    
     def _auto_summary(self, messages: List[Dict]) -> str:
-        """Genera summary automático sin LLM."""
+        """
+        Genera 'State of the Conversation' summary (Sprint 3).
+        Uses LLM if available; falls back to heuristic summary.
+        """
         if not messages:
             return "Sin historial"
         
+        # Try LLM-based summary first
+        transcript = "\n".join(
+            f"{m.get('role', 'unknown')}: {m.get('content', '')[:300]}"
+            for m in messages[-10:]
+        )
+        
+        summary_prompt = (
+            "Resume el 'Estado de la Conversación' en 2-3 oraciones.\n"
+            "Incluye: decisiones clave tomadas, estado actual, y cualquier información "
+            "crítica que el asistente necesite saber para continuar.\n\n"
+            f"Conversación:\n{transcript}\n\n"
+            "Resumen (2-3 oraciones):"
+        )
+        
+        llm_summary = self._call_llm(summary_prompt)
+        if llm_summary:
+            return llm_summary
+        
+        # Fallback: heuristic summary
         user_msgs = [m for m in messages if m.get("role") == "user"]
         assistant_msgs = [m for m in messages if m.get("role") == "assistant"]
         
@@ -340,24 +433,66 @@ Mejora los compression guidelines.
             "messages_deduplicated": self.messages_deduplicated,
         }
     
-    # ==================== v0.5: JACCARD DEDUPLICATION ====================
+    # ==================== SPRINT 3: SEMANTIC DEDUPLICATION ====================
     
-    def jaccard_similarity(self, text1: str, text2: str) -> float:
-        """Calcula similaridad Jaccard entre dos textos."""
+    def _get_text_embedding(self, text: str):
+        """Get embedding vector for text."""
+        if not text:
+            return None
+        kind, model = _get_embedding_model()
+        
+        if kind == "sentence_transformer":
+            return model.encode([text], convert_to_tensor=False)[0]
+        
+        if kind == "tfidf" and model is not None:
+            return model.fit_transform([text])
+        
+        return None
+    
+    def _cosine_similarity_vectors(self, vec1, vec2) -> float:
+        """Compute cosine similarity between two vectors."""
+        if vec1 is None or vec2 is None:
+            return 0.0
+        
+        # SentenceTransformer → numpy arrays
+        if hasattr(vec1, "shape") and hasattr(vec2, "shape") and len(vec1.shape) == 1:
+            import numpy as np
+            norm1 = np.linalg.norm(vec1)
+            norm2 = np.linalg.norm(vec2)
+            if norm1 == 0 or norm2 == 0:
+                return 0.0
+            return float(np.dot(vec1, vec2) / (norm1 * norm2))
+        
+        # TF-IDF → sparse matrices
+        if hasattr(vec1, "toarray"):
+            return float(cosine_similarity(vec1, vec2)[0][0])
+        
+        return 0.0
+    
+    def semantic_similarity(self, text1: str, text2: str) -> float:
+        """Compute semantic similarity via embeddings (cosine)."""
         if not text1 or not text2:
             return 0.0
         
-        set1 = set(text1.lower().split())
-        set2 = set(text2.lower().split())
+        if not _HAS_SKLEARN and not _HAS_SENTENCE_TRANSFORMER:
+            # Fallback to Jaccard if no ML libs available
+            set1 = set(text1.lower().split())
+            set2 = set(text2.lower().split())
+            intersection = len(set1 & set2)
+            union = len(set1 | set2)
+            return intersection / union if union > 0 else 0.0
         
-        intersection = len(set1 & set2)
-        union = len(set1 | set2)
+        vec1 = self._get_text_embedding(text1)
+        vec2 = self._get_text_embedding(text2)
         
-        return intersection / union if union > 0 else 0.0
+        return self._cosine_similarity_vectors(vec1, vec2)
     
-    def deduplicate_messages(self, messages: List[Dict], threshold: float = 0.7) -> List[Dict]:
+    def deduplicate_messages(self, messages: List[Dict], threshold: float = 0.85) -> List[Dict]:
         """
-        Deduplicación Role-Aware + Context Guard v0.5.1.
+        Semantic deduplication using cosine similarity (Sprint 3).
+        
+        Uses SentenceTransformer if available, TF-IDF fallback.
+        Context Guard: last 4 messages are always preserved.
         """
         if len(messages) <= 6:
             return messages
@@ -370,6 +505,7 @@ Mejora los compression guidelines.
             return messages
         
         unique = [to_process[0]]
+        removed_count = 0
         
         for current in to_process[1:]:
             role = current.get("role", "")
@@ -378,29 +514,31 @@ Mejora los compression guidelines.
             
             for existing in unique:
                 if role == existing.get("role"):
-                    sim = self.jaccard_similarity(content, existing.get("content", ""))
+                    sim = self.semantic_similarity(content, existing.get("content", ""))
                     if sim >= threshold:
                         is_duplicate = True
+                        removed_count += 1
                         break
             
             if not is_duplicate:
                 unique.append(current)
         
+        self.messages_deduplicated += removed_count
         return unique + preserved
     
-    # ==================== v0.6: PRESIÓN ADAPTATIVA ====================
+    # ==================== v0.6: SEMANTIC ADAPTATIVE ====================
     
     def get_adaptive_threshold(self, usage_percent: float) -> float:
-        """Retorna umbral Jaccard según nivel de carga."""
+        """Retorna umbral de similitud semántica según nivel de carga."""
         if usage_percent < 50:
-            return 1.0
+            return 1.0       # No dedup
         elif usage_percent < 85:
-            return 0.7
+            return 0.85      # Semantic default (Sprint 3)
         else:
-            return 0.4
+            return 0.65      # Aggressive semantic
     
     def deduplicate_adaptive(self, messages: List[Dict], usage_percent: float) -> List[Dict]:
-        """Deduplicación adaptativa según carga."""
+        """Deduplicación semántica adaptativa según carga."""
         threshold = self.get_adaptive_threshold(usage_percent)
         
         if threshold >= 1.0:

@@ -3,6 +3,7 @@
 # Colores para el script
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
+RED='\033[0;31m'
 NC='\033[0m' # No Color
 
 echo -e "${BLUE}🚀 Iniciando instalación de Anti...${NC}"
@@ -19,9 +20,22 @@ pip install -r requirements.txt
 # Install rich for the launcher to look even better (optional but recommended)
 pip install rich
 
-# 3. Configurar Alias
+# 3. Compilar Ejecutable Go
+echo -e "\n${BLUE}🏗️ Compilando lanzador estático en Go...${NC}"
+if command -v go &> /dev/null; then
+    go build -o anti launcher.go
+    echo -e "${GREEN}✅ Lanzador Go compiled successfully.${NC}"
+else
+    echo -e "${RED}⚠️ Go no está instalado. Se utilizará el lanzador de respaldo en Python.${NC}"
+fi
+
+# 4. Configurar Alias
 echo -e "\n${BLUE}🔗 Configurando alias 'anti' en .bashrc...${NC}"
-ALIAS_LINE="alias anti='$(pwd)/venv/bin/python $(pwd)/launcher.py'"
+if [ -f "./anti" ]; then
+    ALIAS_LINE="alias anti='$(pwd)/anti'"
+else
+    ALIAS_LINE="alias anti='$(pwd)/venv/bin/python $(pwd)/launcher.py'"
+fi
 
 if grep -q "alias anti=" ~/.bashrc; then
     # Actualizar alias existente
@@ -34,4 +48,4 @@ else
 fi
 
 echo -e "\n${GREEN}✨ ¡Instalación completada con éxito!${NC}"
-echo -e "Para empezar a usarlo, ejecutá: ${BOLD}source ~/.bashrc${NC} y luego simplemente escribe ${BOLD}anti${NC}"
+echo -e "Para empezar a usarlo, ejecutá: source ~/.bashrc y luego simplemente escribe anti"

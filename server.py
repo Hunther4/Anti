@@ -13,6 +13,21 @@ from src.tools import read_file
 agent = AntiAgent()
 active_jobs = {}
 
+# Thread-safe persistent event loop for multithreaded asyncio execution
+LOOP = asyncio.new_event_loop()
+
+def start_event_loop(loop):
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+loop_thread = threading.Thread(target=start_event_loop, args=(LOOP,), daemon=True)
+loop_thread.start()
+
+def run_async(coro):
+    """Ejecuta corutinas de forma segura y bloqueante entre hilos usando el event loop persistente."""
+    return asyncio.run_coroutine_threadsafe(coro, LOOP).result()
+
+
 # MCP servers storage
 MCP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memory", "mcp_servers.json")
 
@@ -34,8 +49,7 @@ def save_mcps(mcps):
 def background_agent_task(job_id, message, image_data):
     """Ejecuta el agente en segundo plano y guarda el resultado en active_jobs."""
     try:
-        # handle_command is async
-        response_obj = asyncio.run(agent.handle_command(message, image_data=image_data))
+        response_obj = run_async(agent.handle_command(message, image_data=image_data))
         
         if response_obj is None:
             response_obj = {"response": "Comando ejecutado.", "steps": []}
@@ -93,10 +107,11 @@ class APIHandler(SimpleHTTPRequestHandler):
             archive_stats = agent.memory.archive.get_stats() if hasattr(agent.memory, 'archive') else {"archived_engrams": 0}
 
             try:
+                run_async(agent.brain.get_context_info())
                 status = {
-                    "connected": asyncio.run(agent.brain.check_connection()),
+                    "connected": run_async(agent.brain.check_connection()),
                     "agent_name": agent.config.get("agent_name", "Anti"),
-                    "loaded_model": asyncio.run(agent.brain.get_model_info()),
+                    "loaded_model": agent.brain.model,
                     "files_count": agent.memory.count_workspace_files(),
                     "engrams_count": agent.memory.count_engrams(),
                     "archived_count": archive_stats.get("archived_engrams", 0),
@@ -117,6 +132,69 @@ class APIHandler(SimpleHTTPRequestHandler):
                 }
                 try:
                     self.wfile.write(json.dumps(basic_status).encode('utf-8'))
+                except:
+                    pass
+            return
+
+        elif path_base == '/api/telemetry':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            
+            try:
+                from src.tools import wigolo_cache
+                tps_history = getattr(agent.brain, 'tps_history', [])
+                avg_tps = sum(tps_history) / len(tps_history) if tps_history else 0.0
+                
+                cache_total = wigolo_cache.hits + wigolo_cache.misses
+                cache_ratio = wigolo_cache.hits / cache_total if cache_total > 0 else 0.0
+                
+                telemetry = {
+                    "average_tps": round(avg_tps, 2),
+                    "cache_hits": wigolo_cache.hits,
+                    "cache_misses": wigolo_cache.misses,
+                    "cache_hit_ratio": round(cache_ratio, 2),
+                    "context_max": getattr(agent.brain, 'context_max', 32000),
+                    "context_usable": getattr(agent.brain, 'usable', 30000),
+                    "context_threshold": getattr(agent.brain, 'threshold', 24000),
+                    "engrams_count": agent.memory.count_engrams(),
+                    "skills_count": len(agent.memory.skills.skills) if hasattr(agent.memory.skills, 'skills') else 0
+                }
+                self.wfile.write(json.dumps(telemetry).encode('utf-8'))
+            except Exception as e:
+                try:
+                    self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+                except:
+                    pass
+            return
+
+        elif path_base == '/api/knowledge_graph':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            
+            try:
+                import sqlite3
+                db_path = agent.memory.archive.db_path
+                with sqlite3.connect(db_path) as conn:
+                    conn.row_factory = sqlite3.Row
+                    cursor = conn.cursor()
+                    
+                    # Fetch entities
+                    cursor.execute("SELECT id, observation_id, entity_type, value, timestamp FROM entities ORDER BY id DESC LIMIT 500")
+                    entities = [dict(row) for row in cursor.fetchall()]
+                    
+                    # Fetch edges
+                    cursor.execute("SELECT id, source_id, target_id, relation_type, timestamp FROM edges ORDER BY id DESC LIMIT 1000")
+                    edges = [dict(row) for row in cursor.fetchall()]
+                    
+                self.wfile.write(json.dumps({
+                    "nodes": entities,
+                    "edges": edges
+                }).encode('utf-8'))
+            except Exception as e:
+                try:
+                    self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
                 except:
                     pass
             return

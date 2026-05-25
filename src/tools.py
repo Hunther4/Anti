@@ -12,6 +12,9 @@ import time
 import html2text
 import json
 import itertools
+import ipaddress
+import socket
+
 
 # Optional dependencies
 try:
@@ -20,12 +23,18 @@ try:
 except ImportError:
     HAS_PLAYWRIGHT = False
 
+from src.logger import AppLogger
+from src.exceptions import ToolError
+
 logger = logging.getLogger(__name__)
+app_logger = AppLogger(__name__)
 
 # --- Wigolo Cache & Rerank System (Level 1 & 2) ---
 class WigoloCache:
     def __init__(self, db_path="workspace/wigolo_cache.db"):
         self.db_path = db_path
+        self.hits = 0
+        self.misses = 0
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         with sqlite3.connect(self.db_path) as conn:
             conn.execute('''CREATE TABLE IF NOT EXISTS search_cache (
@@ -40,7 +49,9 @@ class WigoloCache:
             c.execute("SELECT results, timestamp FROM search_cache WHERE query=?", (query,))
             row = c.fetchone()
             if row and (time.time() - row[1]) < (max_age_hours * 3600):
+                self.hits += 1
                 return json.loads(row[0])
+            self.misses += 1
             return None
 
     def set(self, query, results):
@@ -49,6 +60,39 @@ class WigoloCache:
                          (query, json.dumps(results), time.time()))
 
 wigolo_cache = WigoloCache()
+
+
+def is_safe_url(url: str) -> bool:
+    """
+    Validates that the URL does not point to private IP ranges, 
+    loopback addresses, or cloud metadata endpoints (SSRF protection).
+    Prevents DNS rebinding by checking all resolved IP addresses.
+    """
+    try:
+        parsed = urllib.parse.urlparse(url)
+        if not parsed.hostname:
+            return False
+        
+        # Resolve all IP addresses for the hostname to prevent DNS rebinding
+        # socket.getaddrinfo returns a list of 5-tuples: (family, type, proto, canonname, sockaddr)
+        addr_info = socket.getaddrinfo(parsed.hostname, parsed.port or (80 if parsed.scheme == 'http' else 443))
+        
+        for item in addr_info:
+            ip_address_str = item[4][0]
+            ip = ipaddress.ip_address(ip_address_str)
+            
+            if ip.is_loopback:
+                return False
+            if ip.is_private:
+                return False
+            if str(ip) == "169.254.169.254":
+                return False
+                
+        return True
+    except Exception as e:
+        # If we can't resolve or parse, we treat it as unsafe for security
+        app_logger.debug(f"URL safety check failed for {url}: {e}")
+        return False
 
 
 def run_local_command(command: str) -> str:
@@ -69,13 +113,20 @@ def run_local_command(command: str) -> str:
         check = subprocess.run(["docker", "ps"], capture_output=True, text=True, timeout=5)
         if check.returncode == 0:
             has_docker = True
-    except Exception:
-        pass
+    except Exception as e:
+        app_logger.debug(f"Docker not available: {e}")
 
     if has_docker:
-        # Run inside Docker sandbox
+        # Run inside Docker sandbox with strict CPU/Memory containment and host user matching
+        user_flag = []
+        if hasattr(os, "getuid") and hasattr(os, "getgid"):
+            user_flag = ["--user", f"{os.getuid()}:{os.getgid()}"]
+
         docker_cmd = [
             "docker", "run", "--rm",
+            "--memory=512m",
+            "--cpus=1.0",
+        ] + user_flag + [
             "-v", f"{workspace_dir}:/workspace",
             "-w", "/workspace",
             "python:3.12-slim",
@@ -85,38 +136,39 @@ def run_local_command(command: str) -> str:
             result = subprocess.run(docker_cmd, capture_output=True, text=True, timeout=45)
             output = result.stdout
             if result.stderr:
-                # Standard clean up of common docker pull messages or warnings
                 cleaned_stderr = "\n".join(
                     [line for line in result.stderr.splitlines() if "Unable to find image" not in line and "Pulling from" not in line]
                 ).strip()
                 if cleaned_stderr:
                     output += f"\n[ERRORES]\n{cleaned_stderr}"
+            
+            exit_code = result.returncode
+            if exit_code != 0:
+                error_type = "GenericExecutionError"
+                all_err = (result.stderr or "") + (result.stdout or "")
+                if "ModuleNotFoundError" in all_err:
+                    error_type = "ModuleNotFoundError"
+                elif "SyntaxError" in all_err:
+                    error_type = "SyntaxError"
+                elif "NameError" in all_err:
+                    error_type = "NameError"
+                elif "FileNotFoundError" in all_err:
+                    error_type = "FileNotFoundError"
+                elif "PermissionError" in all_err:
+                    error_type = "PermissionError"
+                
+                telemetry = f"[TELEMETRIA: SANDBOX_FAIL] exit_code={exit_code}, error_type={error_type}\n"
+                output = telemetry + output
+
             return output if output.strip() else "Comando ejecutado en sandbox sin salida."
         except subprocess.TimeoutExpired:
-            return "[TIMEOUT] El comando excedió el límite de 45 segundos en el sandbox."
+            return "[TELEMETRIA: SANDBOX_FAIL] exit_code=124, error_type=TimeoutExpired\n[TIMEOUT] El comando excedió el límite de 45 segundos en el sandbox."
         except Exception as e:
-            return f"Error en ejecución del sandbox: {e}"
+            app_logger.exception(f"Sandbox execution failed for command: {command[:100]}")
+            return f"[TELEMETRIA: SANDBOX_FAIL] exit_code=1, error_type=SandboxStartupError\nError en ejecución del sandbox: {e}"
     else:
-        # Fallback to local host execution ONLY under strict security policy
-        dangerous = [';', '&&', '||', '|', '`', '$(', '$(']
-        if any(op in command for op in dangerous):
-            return f"[SEGURIDAD] Docker apagado. Comando local bloqueado: contiene operadores de encadenamiento."
-        
-        local_blocks = ["cat /etc", "sudo", "rm -rf /", "chmod", "chown"]
-        if any(b in command for b in local_blocks):
-            return f"[SEGURIDAD] Docker apagado. Comando local bloqueado por política de seguridad."
+        return "[SEGURIDAD] Docker no está disponible y la ejecución local está deshabilitada por políticas de seguridad estrictas."
 
-        try:
-            args = shlex.split(command)
-            result = subprocess.run(args, capture_output=True, text=True, timeout=30, cwd=workspace_dir)
-            output = result.stdout
-            if result.stderr:
-                output += f"\n[ERRORES]\n{result.stderr}"
-            return output if output.strip() else "Comando ejecutado localmente sin salida."
-        except subprocess.TimeoutExpired:
-            return "[TIMEOUT] El comando local excedió el límite de 30 segundos."
-        except Exception as e:
-            return f"Error al ejecutar comando local: {e}"
 
 
 def duckduckgo_search(query: str, max_results: int = 5, time_period: str = None) -> str:
@@ -164,7 +216,7 @@ def duckduckgo_search(query: str, max_results: int = 5, time_period: str = None)
                 wigolo_cache.set(query, final_output)
                 return final_output
     except Exception as e:
-        logger.debug(f"SearxNG failed: {e}")
+        app_logger.debug(f"SearxNG search failed for '{query}': {e}")
         pass  # Fallback to Google/DuckDuckGo
 
     # 1.5 Try Google Search Scraper (Robust)
@@ -174,7 +226,7 @@ def duckduckgo_search(query: str, max_results: int = 5, time_period: str = None)
             wigolo_cache.set(query, google_results)
             return google_results
     except Exception as e:
-        logger.debug(f"Google Search failed: {e}")
+        app_logger.debug(f"Google Search failed for '{query}': {e}")
         pass
 
     # 2. Fallback: DuckDuckGo Lite API (more reliable than HTML scraping)
@@ -204,7 +256,8 @@ def duckduckgo_search(query: str, max_results: int = 5, time_period: str = None)
                 final_output = "\n\n".join(output)
                 wigolo_cache.set(query, final_output)
                 return final_output
-    except Exception:
+    except Exception as e:
+        app_logger.debug(f"DuckDuckGo API failed for '{query}': {e}")
         pass
 
     # 3. Last resort: DuckDuckGo HTML scraper
@@ -253,6 +306,7 @@ def duckduckgo_search(query: str, max_results: int = 5, time_period: str = None)
         return final_output
 
     except Exception as e:
+        app_logger.exception(f"DuckDuckGo HTML search failed for '{query}'")
         return f"Error en la busqueda: {e}"
 
 
@@ -318,6 +372,7 @@ def google_search(query: str, max_results: int = 5, time_period: str = None) -> 
         wigolo_cache.set(query, final_output)
         return final_output
     except Exception as e:
+        app_logger.exception(f"Google Search failed for '{query}'")
         return f"Error en Google Search: {e}"
 
 
@@ -326,6 +381,9 @@ async def browser_fetch(url: str) -> str:
     Fetches a URL using a real browser (Firefox) via Playwright.
     Handles JavaScript rendering.
     """
+    if not is_safe_url(url):
+        return f"[SEGURIDAD] Acceso bloqueado a la URL: {url}. Las direcciones privadas, loopback o de metadatos de nube están prohibidas."
+
     if not HAS_PLAYWRIGHT:
         return "[!] Error: Playwright no instalado. Usando fetch_url_text básico.\n" + fetch_url_text(url)
 
@@ -345,6 +403,7 @@ async def browser_fetch(url: str) -> str:
             await browser.close()
             return content[:8000]
     except Exception as e:
+        app_logger.exception(f"Browser fetch failed for {url}")
         return f"Error en Browser Fetch (Playwright): {e}. Fallback:\n" + fetch_url_text(url)
 
 
@@ -352,6 +411,9 @@ def fetch_url_text(url: str) -> str:
     """
     Fetch the text content of a URL and clean it up using html2text (Level 2).
     """
+    if not is_safe_url(url):
+        return f"[SEGURIDAD] Acceso bloqueado a la URL: {url}. Las direcciones privadas, loopback o de metadatos de nube están prohibidas."
+
     headers = {
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                        "(KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36"
@@ -371,6 +433,7 @@ def fetch_url_text(url: str) -> str:
         text = re.sub(r'\n{3,}', '\n\n', text)
         return text[:8000]
     except Exception as e:
+        app_logger.exception(f"URL fetch failed for {url}")
         return f"Error al leer la URL: {e}"
 def safe_join(base_dir: str, path: str) -> str:
     """
@@ -408,24 +471,37 @@ def write_file(filename: str, content: str, workspace_path: str = "workspace") -
     except PermissionError as pe:
         return str(pe)
     except Exception as e:
+        app_logger.exception(f"File write failed for {filename}")
         return f"Error al escribir archivo: {e}"
 
 
 def read_file(filename: str, workspace_path: str = "workspace") -> str:
     """
-    Read a file from the workspace directory.
+    Read a file from the workspace directory using parse_document.
+    Supports overlapping chunk pagination and auto-encoding detection.
     """
     try:
-        filepath = safe_join(workspace_path, filename)
+        # Extraer el sufijo de chunk si existe
+        clean_filename = filename
+        chunk_suffix = ""
+        if "#chunk" in filename:
+            clean_filename, chunk_part = filename.split("#chunk", 1)
+            chunk_suffix = "#chunk" + chunk_part
+
+        filepath = safe_join(workspace_path, clean_filename)
+        
+        # Combinar el path resuelto de forma segura con el fragmento para el parseador
+        parse_path = filepath + chunk_suffix
         
         if not os.path.exists(filepath):
-            return f"Error: El archivo '{filename}' no existe."
+            return f"Error: El archivo '{clean_filename}' no existe."
         
-        with open(filepath, "r", encoding="utf-8") as f:
-            return f.read()
+        from src.document_parser import parse_document
+        return parse_document(parse_path)
     except PermissionError as pe:
         return str(pe)
     except Exception as e:
+        app_logger.exception(f"File read failed for {filename}")
         return f"Error al leer archivo: {e}"
 
 

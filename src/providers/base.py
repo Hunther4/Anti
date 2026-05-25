@@ -24,6 +24,15 @@ class BaseProvider(ABC):
         self.context_max = 32000
         self.usable = 32000
         self.threshold = 16000
+        self.tps_history = []
+    
+    def record_usage(self, usage: dict):
+        """Registra la telemetría de TPS del chat actual."""
+        tps = usage.get("tps", 0.0)
+        if tps > 0:
+            self.tps_history.append(tps)
+            if len(self.tps_history) > 50:
+                self.tps_history.pop(0)
     
     @abstractmethod
     async def chat(self, messages: List[Dict], temperature: float = 0.7) -> Tuple[str, Dict[str, Any]]:
@@ -97,6 +106,9 @@ class ProviderFactory:
         "openai": None,
         "gemini": None,
         "deepseek": None,
+        "openaicompatible": None,
+        "anthropic": None,
+        "minimax": None,
     }
     
     @classmethod
@@ -139,6 +151,15 @@ class ProviderFactory:
             elif provider == "deepseek":
                 from .deepseek import DeepSeekProvider
                 cls.PROVIDERS[provider] = DeepSeekProvider
+            elif provider == "openaicompatible":
+                from .openaicompatible import OpenAICompatibleProvider
+                cls.PROVIDERS[provider] = OpenAICompatibleProvider
+            elif provider == "anthropic":
+                from .anthropic import AnthropicProvider
+                cls.PROVIDERS[provider] = AnthropicProvider
+            elif provider == "minimax":
+                from .minimax import MinimaxProvider
+                cls.PROVIDERS[provider] = MinimaxProvider
             else:
                 raise ValueError(f"Proveedor desconocido: {provider}")
         

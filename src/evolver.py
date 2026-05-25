@@ -76,9 +76,20 @@ class SkillEvolver:
             task = log.get("task", "")
             result = log.get("result", "")
             score = log.get("score", 0.0)
+            
+            # Extraer telemetría estructurada del sandbox si existe
+            telemetry_info = ""
+            if result and "[TELEMETRIA: SANDBOX_FAIL]" in result:
+                match = re.search(r"\[TELEMETRIA: SANDBOX_FAIL\] exit_code=(\d+), error_type=(\w+)", result)
+                if match:
+                    exit_code = match.group(1)
+                    error_type = match.group(2)
+                    telemetry_info = f"\n⚠️ **ERROR TÉCNICO EN EJECUCIÓN (Sandbox/Local):** Exit Code `{exit_code}` ({error_type})\n"
+            
             failure_blocks.append(
                 f"### Falla {i + 1}  (Puntaje={score})\n"
                 f"**Tarea/Instruccion:**\n{task}\n"
+                f"{telemetry_info}"
                 f"**Respuesta del Agente:**\n{result[:500]}...\n"
             )
 
@@ -90,7 +101,8 @@ class SkillEvolver:
             "CRITERIOS DE EVOLUCIÓN:\n"
             "1. SÍNTESIS EXTREMA: ¿Cómo puede el agente decir lo mismo con menos palabras pero más datos?\n"
             "2. PROCESAMIENTO PREVIO: ¿Qué pasos de razonamiento faltaron para 'destilar' la info antes de responder?\n"
-            "3. CALIDAD DE FUENTES: ¿Cómo evitar redundancia entre fuentes similares?\n\n"
+            "3. CALIDAD DE FUENTES: ¿Cómo evitar redundancia entre fuentes similares?\n"
+            "4. MITIGACIÓN DE EXCEPCIONES: Si detectás un error de Sandbox (`[TELEMETRIA: SANDBOX_FAIL]`), diseña una habilidad conductual correctiva para evitar ese error específico (ej: ModuleNotFoundError, SyntaxError, FileNotFoundError) enseñándole al agente a validar la sintaxis, verificar precondiciones o importar librerías necesarias.\n\n"
             "---\n"
             "## Experiencias Recientes\n\n"
             + "\n\n".join(failure_blocks)
@@ -99,7 +111,7 @@ class SkillEvolver:
             + json.dumps(existing, indent=2)
             + "\n\n---\n"
             "## Instrucciones de Salida\n\n"
-            f"Genera **1 a {self.max_new_skills}** nuevas reglas o habilidades. Enfocate en la DENSIDAD INFORMATIVA y la EFICIENCIA de búsqueda.\n\n"
+            f"Genera **1 a {self.max_new_skills}** nuevas reglas o habilidades. Enfocate en la DENSIDAD INFORMATIVA, EFICIENCIA de búsqueda y AUTOCORRECCIÓN de errores.\n\n"
             "Formato JSON:\n"
             "- `name`: slug (ej: `sintesis-de-fuentes`).\n"
             "- `description`: cuándo aplicar.\n"
@@ -149,31 +161,107 @@ class SkillEvolver:
 
         return result
 
-    # --- Dual Evolution: Factual Engrams ---
+    # --- Sprint 3: Engram Merge (Dual Evolution) ---
     
-    def _check_duplicate_engram(self, new_content, engrams_dir):
-        """Calcula la similitud de Jaccard con engrams existentes para evitar duplicados."""
+    def _engram_similarity(self, content_a: str, content_b: str) -> float:
+        """Compute similarity between two engram contents using token overlap."""
+        tokens_a = set(re.findall(r'\w+', content_a.lower()))
+        tokens_b = set(re.findall(r'\w+', content_b.lower()))
+        if not tokens_a or not tokens_b:
+            return 0.0
+        intersection = tokens_a & tokens_b
+        union = tokens_a | tokens_b
+        return len(intersection) / len(union) if union else 0.0
+    
+    async def _synthesize_merge(self, old_content: str, new_content: str, topic: str) -> Optional[str]:
+        """Call LLM to synthesize two engram observations into one higher-density observation."""
+        prompt = (
+            "Eres un sistema de síntesis de memoria. Tu tarea es fusionar DOS observaciones "
+            "relacionadas sobre el mismo tema en una ÚNICA observación de mayor densidad.\n\n"
+            "REGLAS:\n"
+            "1. Conserva TODA la información factual de ambas observaciones.\n"
+            "2. Elimina redundancias — si ambos dicen lo mismo, dilo una vez.\n"
+            "3. Mantén un tono neutral y factual.\n"
+            "4. La salida debe ser un párrafo denso de 2-4 oraciones.\n\n"
+            f"Tema: {topic}\n\n"
+            f"Observación A:\n{old_content}\n\n"
+            f"Observación B:\n{new_content}\n\n"
+            "Observación fusionada (2-4 oraciones):"
+        )
+        
+        try:
+            response = await asyncio.to_thread(self._call_llm, prompt)
+            merged = response.strip()
+            return merged if len(merged) > 20 else None
+        except Exception as e:
+            logger.error(f"[SkillEvolver] Merge synthesis failed: {e}")
+            return None
+    
+    def _check_duplicate_engram(self, new_content: str, engrams_dir: str):
+        """
+        Check for duplicate engrams. If similarity > 0.7, return (True, filename, old_data, similarity).
+        Used by _merge_engram to trigger the merge flow.
+        """
         new_tokens = set(re.findall(r'\w+', new_content.lower()))
-        if not new_tokens: return False, None
-
-        if not os.path.exists(engrams_dir): return False, None
-
+        if not new_tokens:
+            return False, None, None, 0.0
+        
+        if not os.path.exists(engrams_dir):
+            return False, None, None, 0.0
+        
         for filename in os.listdir(engrams_dir):
-            if not filename.endswith(".json"): continue
+            if not filename.endswith(".json"):
+                continue
             try:
-                with open(os.path.join(engrams_dir, filename), "r") as f:
+                filepath = os.path.join(engrams_dir, filename)
+                with open(filepath, "r") as f:
                     old_data = json.load(f)
-                    old_tokens = set(re.findall(r'\w+', old_data.get("content", "").lower()))
-                    
-                    if not old_tokens: continue
-                    intersection = new_tokens & old_tokens
-                    union = new_tokens | old_tokens
-                    similarity = len(intersection) / len(union)
-                    
-                    if similarity > 0.5: # Umbral de duplicidad
-                        return True, old_data.get("topic")
-            except: continue
-        return False, None
+                similarity = self._engram_similarity(new_content, old_data.get("content", ""))
+                if similarity > 0.7:
+                    return True, filename, old_data, similarity
+            except Exception:
+                continue
+        
+        return False, None, None, 0.0
+    
+    async def merge_engram(self, new_content: str, engrams_dir: str) -> dict:
+        """
+        Attempt to merge a new engram with existing ones.
+        
+        Returns:
+            {"action": "merged", "filename": ..., "content": ...} if merged,
+            {"action": "saved_new", "filename": ...} if no merge needed,
+            {"action": "skipped", "reason": ...} otherwise.
+        """
+        is_dup, filename, old_data, similarity = self._check_duplicate_engram(new_content, engrams_dir)
+        
+        if not is_dup:
+            # Save as new engram (handled by caller)
+            return {"action": "saved_new", "filename": None, "similarity": similarity}
+        
+        # Merge: synthesize old + new
+        topic = old_data.get("topic", "untitled")
+        merged = await self._synthesize_merge(old_data.get("content", ""), new_content, topic)
+        
+        if merged:
+            # Remove old file
+            old_path = os.path.join(engrams_dir, filename)
+            try:
+                os.remove(old_path)
+            except OSError:
+                pass
+            
+            # Return merged result for caller to save
+            return {
+                "action": "merged",
+                "filename": filename,
+                "topic": topic,
+                "content": merged,
+                "similarity": similarity,
+            }
+        
+        # Synthesis failed — save new separately
+        return {"action": "saved_new", "filename": None, "similarity": similarity, "note": "merge_synthesis_failed"}
 
     async def extract_engrams(self, logs: List[Dict]) -> List[Dict]:
         """

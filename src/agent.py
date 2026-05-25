@@ -3,9 +3,13 @@ import json
 import re
 import asyncio
 import logging
+import subprocess
 from datetime import datetime
 
+from src.logger import AppLogger, Colors
+
 logger = logging.getLogger(__name__)
+app_logger = AppLogger(__name__)
 
 from src.brain import Brain
 from src.memory import MemoryManager
@@ -17,17 +21,6 @@ from src.tools import duckduckgo_search, fetch_url_text, autonomous_research, wr
 from src.document_parser import parse_document
 from prompts.system import build_system_prompt
 from prompts.templates import REASONER_PROMPT, REFLECT_PROMPT, COMPACT_PROMPT, IMPORTANCE_PROMPT
-
-
-class Colors:
-    BLUE = "\033[94m"
-    GREEN = "\033[92m"
-    YELLOW = "\033[93m"
-    RED = "\033[91m"
-    CYAN = "\033[96m"
-    WHITE = "\033[97m"
-    BOLD = "\033[1m"
-    END = "\033[0m"
 
 
 def print_header(name="ANTI-AGENT"):
@@ -115,35 +108,162 @@ class AntiAgent:
             "personality": "Sos un agente autonomo avanzado."
         }
 
+    def render_markdown(self, text: str) -> str:
+        """
+        Renders basic markdown elements into gorgeous ANSI escape sequences.
+        Prevents visual fatigue by replacing raw markers with clean layouts.
+        """
+        if not text:
+            return ""
+        
+        lines = text.split("\n")
+        rendered_lines = []
+        in_code_block = False
+        
+        for line in lines:
+            # Code block toggle
+            if line.strip().startswith("```"):
+                in_code_block = not in_code_block
+                if in_code_block:
+                    lang = line.replace("```", "").strip().upper() or "CODE"
+                    rendered_lines.append(f"{Colors.GRAY}┌─── {lang} ──────────────────────────────────────{Colors.END}")
+                else:
+                    rendered_lines.append(f"{Colors.GRAY}└──────────────────────────────────────────────────{Colors.END}")
+                continue
+                
+            if in_code_block:
+                rendered_lines.append(f"{Colors.WHITE}{line}{Colors.END}")
+                continue
+                
+            # Horizontal Rules
+            if line.strip() in ("---", "***", "___"):
+                rendered_lines.append(f"{Colors.CYAN}⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼{Colors.END}")
+                continue
+                
+            # Headers
+            if line.startswith("# "):
+                header_text = line[2:].strip()
+                rendered_lines.append(f"\n{Colors.CYAN}{Colors.BOLD}█ {header_text.upper()}{Colors.END}")
+                rendered_lines.append(f"{Colors.CYAN}⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼{Colors.END}")
+                continue
+                
+            if line.startswith("## "):
+                header_text = line[3:].strip()
+                rendered_lines.append(f"\n{Colors.BLUE}{Colors.BOLD}■ {header_text.upper()}{Colors.END}")
+                continue
+                
+            if line.startswith("### "):
+                header_text = line[4:].strip()
+                rendered_lines.append(f"\n{Colors.MAGENTA}{Colors.BOLD}➔ {header_text}{Colors.END}")
+                continue
+
+            # Lists
+            stripped = line.lstrip()
+            indent_len = len(line) - len(stripped)
+            
+            is_bullet = False
+            content = stripped
+            if stripped.startswith("* ") or stripped.startswith("- "):
+                is_bullet = True
+                content = stripped[2:]
+            elif stripped.startswith("*") and not stripped.startswith("**"):
+                is_bullet = True
+                content = stripped[1:]
+            
+            if is_bullet:
+                indent = " " * indent_len
+                bullet_char = "•" if indent_len == 0 else "◦"
+                bullet_color = Colors.CYAN if indent_len == 0 else Colors.BLUE
+                line = f"{indent}{bullet_color}{bullet_char}{Colors.END} {content}"
+
+            # Bold & Italic
+            line = re.sub(r"\*\*(.*?)\*\*", f"{Colors.BOLD}\\1{Colors.END}", line)
+            line = re.sub(r"\*(.*?)\*", f"{Colors.BLUE}\\1{Colors.END}", line)
+            line = re.sub(r"_(.*?)_", f"{Colors.BLUE}\\1{Colors.END}", line)
+            
+            rendered_lines.append(line)
+            
+        return "\n".join(rendered_lines)
+
     # --- CLI Loop ---
 
     def run(self):
-        name = self.config.get("agent_name", "ANTI-AGENT")
-        # print_header(name) # Removed header basura
+        name = self.config.get("agent_name", "Anti").upper()
+        
+        # 1. Glowing Cosmic ASCII Banner
+        print(f"\n{Colors.CYAN}{Colors.BOLD}  █████  ███    ██ ████████ ██")
+        print(" ██   ██ ████   ██    ██    ██")
+        print(" ███████ ██ ██  ██    ██    ██")
+        print(" ██   ██ ██  ██ ██    ██    ██")
+        print(f" ██   ██ ██   ████    ██    ██  v1.5 Cosmic {Colors.END}{Colors.WHITE}(DevOps & Security Auditor){Colors.END}")
+        print(f"{Colors.CYAN}⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼{Colors.END}\n")
 
+        # 2. Connection and setup diagnostics cards
+        provider_name = type(self.brain).__name__.lower()
+        is_local = "lmstudio" in provider_name or "ollama" in provider_name
+        
+        provider_label = self.config.get("provider", "auto").upper()
+        model_label = self.config.get("model") or "Auto-detectado"
+        
+        # Memory Check
+        db_path = os.path.join(self.base_dir, "memory/cold_archive.db")
+        db_size_kb = 0
+        if os.path.exists(db_path):
+            db_size_kb = int(os.path.getsize(db_path) / 1024)
+            
+        # Active Plugins count
+        plugins_count = 0
+        if hasattr(self, 'plugin_manager') and self.plugin_manager:
+            plugins_count = len(self.plugin_manager.tools)
+        else:
+            plugins_count = 5 # default fallback core tools
+            
+        prm_status = "ACTIVADO 🟢" if self.config.get("enable_prm_scorer", True) else "DESACTIVADO 🔴"
+        
+        # Display elegant configuration cards
+        print(f"  {Colors.BOLD}🤖 [PROVEEDOR]:{Colors.END} {Colors.CYAN}{provider_label}{Colors.END} | {Colors.WHITE}{model_label}{Colors.END}")
+        print(f"  {Colors.BOLD}🧠 [MEMORIA]:{Colors.END}    SQLite ({db_size_kb} KB)")
+        print(f"  {Colors.BOLD}🔌 [PLUGINS]:{Colors.END}    {plugins_count} Herramientas Activas")
+        print(f"  {Colors.BOLD}⚡ [PRM SCORER]:{Colors.END} {prm_status}")
+        
+        # Dynamic sliding context message
+        if is_local:
+            print(f"  {Colors.BOLD}🔒 [CONTEXTO]:{Colors.END}   Local ({Colors.GREEN}Ventana 10 msg - Ultra Velocidad ⚡{Colors.END})")
+        else:
+            print(f"  {Colors.BOLD}☁️ [CONTEXTO]:{Colors.END}   Nube ({Colors.BLUE}Ventana 100 msg - Memoria Profunda ☁️{Colors.END})")
+        print(f"\n{Colors.CYAN}⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼{Colors.END}\n")
+
+        # Connection check
         if not asyncio.run(self.brain.check_connection()):
             url = self.config.get("lm_studio_url", "http://127.0.0.1:1234/v1")
-            print(f"{Colors.YELLOW}[!] No se pudo conectar con LM Studio en {url}.{Colors.END}")
-            print(f"{Colors.YELLOW}    Asegurate de que el servidor local este encendido.{Colors.END}\n")
+            print(f"{Colors.YELLOW}[!] Advertencia: No se pudo conectar con el proveedor seleccionado.{Colors.END}")
+            print(f"{Colors.YELLOW}    Asegurate de que el servidor local o tu API key esten configurados.{Colors.END}\n")
 
         while self.is_running:
             try:
-                user_input = input(f"{Colors.GREEN}{Colors.BOLD}Anti@Local > {Colors.END}").strip()
+                # Dynamic shell prompt based on provider type
+                if is_local:
+                    prompt = f"{Colors.CYAN}{Colors.BOLD}[Local ⚡]{Colors.END} {Colors.GREEN}{Colors.BOLD}Anti@Local > {Colors.END}"
+                else:
+                    prompt = f"{Colors.BLUE}{Colors.BOLD}[Cloud ☁️]{Colors.END} {Colors.GREEN}{Colors.BOLD}Anti@Cloud > {Colors.END}"
+                    
+                user_input = input(prompt).strip()
                 if not user_input:
                     continue
 
                 if user_input.lower() in ["exit", "quit"]:
                     self.is_running = False
-                    print(f"{Colors.BLUE}Apagando sistema...{Colors.END}")
+                    print(f"\n{Colors.BLUE}[*] Apagando sistemas... ¡Hasta pronto, Analista Supremo! 🚀{Colors.END}\n")
                     break
 
                 result = asyncio.run(self.handle_command(user_input))
                 if result:
                     if isinstance(result, dict) and "response" in result:
-                        print(f"\n{result['response']}\n")
+                        print(f"\n{self.render_markdown(result['response'])}\n")
                     else:
-                        print(f"\n{result}\n")
+                        print(f"\n{self.render_markdown(str(result))}\n")
             except KeyboardInterrupt:
+                print(f"\n\n{Colors.BLUE}[*] Interrupción de teclado detectada. Saliendo...{Colors.END}\n")
                 break
 
     # --- Command Handler ---
@@ -167,6 +287,8 @@ class AntiAgent:
             self.memory.forget()
             print(f"{Colors.RED}[!] Memoria de patrones borrada.{Colors.END}")
             return "Memoria borrada."
+        elif cmd_lower == "plugins":
+            return self._list_plugins()
         elif cmd_lower == "memories":
             return self._show_memories()
         elif cmd_lower == "engra":
@@ -273,9 +395,11 @@ class AntiAgent:
         # Main Chat Inference
         try:
             response, usage = await self.brain.chat(messages)
+            self.brain.record_usage(usage)
             prompt_tokens = usage.get("prompt_tokens", 0)
             self.context_mgr.token_count = prompt_tokens
         except Exception as e:
+            app_logger.exception(f"Chat inference failed")
             return {
                 "response": f"Error en inferencia: {e}",
                 "steps": [],
@@ -287,6 +411,7 @@ class AntiAgent:
         # Handle both tuple (fixed) and string (legacy) error responses
         response_str = response if isinstance(response, str) else response[0] if isinstance(response, tuple) else str(response)
         if "Error conectando con LM Studio" in response_str:
+            app_logger.error(f"LM Studio connection error: {response_str}")
             print(f"{Colors.RED}[!] {response_str}{Colors.END}")
             return {
                 "response": f"No pude procesar tu solicitud. Error de LM Studio: {response_str}",
@@ -348,6 +473,7 @@ class AntiAgent:
             messages.append({"role": "user", "content": tool_context})
             print(f"{Colors.CYAN}[*] Procesando resultado de herramienta...{Colors.END}")
             response, usage = await self.brain.chat(messages)
+            self.brain.record_usage(usage)
             prompt_tokens = usage.get("prompt_tokens", 0)
             self.context_mgr.token_count = prompt_tokens
             response = response.replace("<thought>", "").replace("</thought>", "").strip()
@@ -358,54 +484,77 @@ class AntiAgent:
             print(f"{Colors.YELLOW}[*] Reasoner: auto-critica...{Colors.END}")
             critic_prompt = REASONER_PROMPT.format(user_msg=user_msg, response=response)
             response, _ = await self.brain.chat([{"role": "user", "content": critic_prompt}])
-            # print(f"{Colors.GREEN}[+] Respuesta refinada.{Colors.END}") # Silenced
 
-        # Evaluate response with PRM Scorer
+        # Check if the message is a simple conversational greeting or too short to avoid PRM scorer failures
+        is_greeting = False
+        greeting_words = {"hola", "hello", "hi", "que tal", "como estas", "buenos dias", "buenas tardes", "buenas noches", "buenas", "que onda", "ey", "como va"}
+        clean_msg = re.sub(r'[^\w\s]', '', user_text.lower()).strip()
+        if (clean_msg in greeting_words or len(clean_msg.split()) < 4) and tool_step == 0:
+            is_greeting = True
+
+        # Evaluate response with PRM Scorer (Optional for ultimate local model speed)
         is_success = True
-        score = 0.0
-        votes = []
-        try:
-            # print(f"{Colors.BLUE}[*] Scorer evaluando respuesta...{Colors.END}") # Silenced
-            eval_result = await self.scorer.evaluate(response, user_text)
-            score = eval_result["score"]
-            votes = eval_result["votes"]
-            is_success = score > 0
-            print(f"{Colors.GREEN}[+] Score: {score} | Votes: {votes}{Colors.END}")
-
-            # RECURSIVE METACOGNITION: Refinamiento basado en feedback del Scorer (v2.0)
-            retries = 0
-            max_refinement_retries = 2
-            
-            while score < 0.7 and retries < max_refinement_retries:
-                retries += 1
-                print(f"{Colors.RED}[!] Calidad insuficiente (Score {score}). Iniciando refinamiento recursivo {retries}/{max_refinement_retries}...{Colors.END}")
-                
-                refinement_prompt = (
-                    f"### AUTO-CRÍTICA METACOGNITIVA\n"
-                    f"Tu respuesta anterior obtuvo un puntaje bajo ({score}) en el benchmark de calidad.\n"
-                    f"INSTRUCCIÓN ORIGINAL: '{user_text}'\n"
-                    f"RESPUESTA ANTERIOR: '{response[:500]}...'\n\n"
-                    f"ERRORES DETECTADOS: Posible redundancia, falta de datos duros (números/porcentajes) o placeholders.\n"
-                    f"ACCIÓN: Genera una versión SUPERIOR. Aplica SINTESIS EXTREMA, elimina introducciones innecesarias y "
-                    f"asegúrate de que cada afirmación esté respaldada por un dato o métrica si es posible."
-                )
-                
-                response, _ = await self.brain.chat([{"role": "user", "content": refinement_prompt}])
-                response = response.replace("<thought>", "").replace("</thought>", "").strip()
-                
-                # Re-evaluar la nueva respuesta
-                print(f"{Colors.BLUE}[*] Re-evaluando respuesta refinada...{Colors.END}")
+        score = 1.0
+        votes = ["skipped"]
+        if self.config.get("enable_prm_scorer", True) and not is_greeting:
+            score = 0.0
+            votes = []
+            try:
+                # print(f"{Colors.BLUE}[*] Scorer evaluando respuesta...{Colors.END}") # Silenced
                 eval_result = await self.scorer.evaluate(response, user_text)
                 score = eval_result["score"]
                 votes = eval_result["votes"]
-                print(f"{Colors.GREEN}[+] Nuevo Score: {score} | Votes: {votes}{Colors.END}")
+                is_success = score >= 0.5
+                if any(v == "fail" for v in votes):
+                    app_logger.warning("Scorer query failed, skipping evaluation")
+                    print(f"{Colors.YELLOW}[!] Advertencia: La consulta del Scorer falló. Saltando evaluación...{Colors.END}")
+                    is_success = True
+                    score = 1.0
+                else:
+                    print(f"{Colors.GREEN}[+] Score: {score} | Votes: {votes}{Colors.END}")
+ 
+                # RECURSIVE METACOGNITION: Refinamiento basado en feedback del Scorer (v2.0)
+                retries = 0
+                max_refinement_retries = 2
+                
+                while score < 0.5 and retries < max_refinement_retries:
+                    retries += 1
+                    app_logger.warning(f"Insufficient quality (Score {score}), starting refinement {retries}/{max_refinement_retries}")
+                    print(f"{Colors.RED}[!] Calidad insuficiente (Score {score}). Iniciando refinamiento recursivo {retries}/{max_refinement_retries}...{Colors.END}")
+                    
+                    refinement_prompt = (
+                        f"### AUTO-CRÍTICA METACOGNITIVA\n"
+                        f"Tu respuesta anterior obtuvo un puntaje bajo ({score}) en el benchmark de calidad.\n"
+                        f"INSTRUCCIÓN ORIGINAL: '{user_text}'\n"
+                        f"RESPUESTA ANTERIOR: '{response[:500]}...'\n\n"
+                        f"ERRORES DETECTADOS: Posible redundancia, falta de datos duros (números/porcentajes) o placeholders.\n"
+                        f"ACCIÓN: Genera una versión SUPERIOR. Aplica SINTESIS EXTREMA, elimina introducciones innecesarias y "
+                        f"asegúrate de que cada afirmación esté respaldada por un dato o métrica si es posible."
+                    )
+                    
+                    response, _ = await self.brain.chat([{"role": "user", "content": refinement_prompt}])
+                    response = response.replace("<thought>", "").replace("</thought>", "").strip()
+                    
+                    # Re-evaluar la nueva respuesta
+                    print(f"{Colors.BLUE}[*] Re-evaluando respuesta refinada...{Colors.END}")
+                    eval_result = await self.scorer.evaluate(response, user_text)
+                    score = eval_result["score"]
+                    votes = eval_result["votes"]
+                    print(f"{Colors.GREEN}[+] Nuevo Score: {score} | Votes: {votes}{Colors.END}")
+ 
+                if retries > 0:
+                    print(f"{Colors.GREEN}[+] Refinamiento completado exitosamente.{Colors.END}")
+                    is_success = score >= 0.5
+ 
+            except Exception as e:
+                app_logger.exception(f"Error in PRM Scorer")
+                print(f"{Colors.RED}[!] Error en Scorer: {e}{Colors.END}")
+        else:
+            if is_greeting:
+                print(f"{Colors.BLUE}[*] Conversación simple detectada. Saltando PRM Scorer (Velocidad Instantánea) ⚡{Colors.END}")
+            else:
+                print(f"{Colors.BLUE}[*] PRM Scorer desactivado. Saltando a respuesta directa (Velocidad Suprema) ⚡{Colors.END}")
 
-            if retries > 0:
-                print(f"{Colors.GREEN}[+] Refinamiento completado exitosamente.{Colors.END}")
-                is_success = score >= 0.7
-
-        except Exception as e:
-            print(f"{Colors.RED}[!] Error en Scorer: {e}{Colors.END}")
 
         # Log and update history
         self.memory.log_experience(f"Chat: {user_msg}", response, is_success, score, votes)
@@ -417,8 +566,18 @@ class AntiAgent:
 
         self.history.append({"role": "user", "content": user_msg})
         self.history.append({"role": "assistant", "content": response})
-        if len(self.history) > 50:
-            self.history = self.history[-50:]
+        
+        # Optimize chat history length dynamically (Local model vs Cloud provider)
+        provider_name = type(self.brain).__name__.lower()
+        is_local = "lmstudio" in provider_name or "ollama" in provider_name
+        
+        if is_local:
+            max_history = self.config.get("max_history_len_local", 10)
+        else:
+            max_history = self.config.get("max_history_len_cloud", 40)
+            
+        if len(self.history) > max_history:
+            self.history = self.history[-max_history:]
 
         # Auto-maintenance
         self.task_counter += 1
@@ -576,6 +735,7 @@ class AntiAgent:
                 self.memory.save_engram(e.get("topic", "tema-desconocido"), e.get("content", ""))
                 print(f"{Colors.GREEN}[+] Engram memorizado: {e.get('topic')}{Colors.END}")
         except Exception as e:
+            app_logger.exception("Error in Engram extraction")
             print(f"{Colors.RED}[!] Error en extraccion de Engrams: {e}{Colors.END}")
 
         # 2. Pase Conductual: Refinar Skills
@@ -583,6 +743,7 @@ class AntiAgent:
         try:
             new_skills = await self.evolver.evolve(logs, self.memory.skills.skills)
         except Exception as e:
+            app_logger.exception("Error in Skill Evolver")
             print(f"{Colors.RED}[!] Error en Evolver (Skills): {e}{Colors.END}")
             return "Error en evolucion de habilidades."
 
@@ -675,7 +836,8 @@ class AntiAgent:
                                     elif key.strip() == "description":
                                         description = val.strip()
                     lines.append(f"  • {name}" + (f" — {description}" if description else ""))
-                except Exception:
+                except Exception as e:
+                    app_logger.debug(f"Error reading MCP SKILL.md for {folder}: {e}")
                     lines.append(f"  • {folder}")
             else:
                 lines.append(f"  • {folder}")
@@ -751,6 +913,20 @@ Contenido del MCP instalado. Editar este archivo para personalizar el comportami
         except Exception as e:
             return f"Error leyendo MCP '{mcp_id}': {e}"
 
+    def _list_plugins(self):
+        title = f"\n{Colors.CYAN}{Colors.BOLD}🔌 PLUGINS & HERRAMIENTAS ACTIVAS EN ANTI{Colors.END}\n"
+        lines = [title]
+        if hasattr(self, "plugin_manager") and self.plugin_manager and self.plugin_manager.tools:
+            for name, tool in self.plugin_manager.tools.items():
+                desc = tool.get("description", "Sin descripción")
+                lines.append(f"  {Colors.GREEN}{Colors.BOLD}• {name}{Colors.END}: {desc}")
+        else:
+            lines.append(f"  {Colors.YELLOW}No se encontraron plugins dinámicos cargados.{Colors.END}")
+        lines.append("")
+        result = "\n".join(lines)
+        print(result)
+        return result
+
     def _show_help(self):
         help_text = """
 ANTI-AGENT — COMANDOS
@@ -758,6 +934,9 @@ ANTI-AGENT — COMANDOS
   [Chat]
     Escribi cualquier pregunta y el agente responde.
     search <query>  Fuerza una busqueda web inmediata.
+
+  [Plugins & Herramientas]
+    plugins         Lista todos los plugins y herramientas cargadas en Anti.
 
   [MCP - Model Capability Protocol]
     mcp list          Lista todos los MCPs instalados

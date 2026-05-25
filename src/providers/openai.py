@@ -7,6 +7,7 @@ API: https://api.openai.com/v1/chat/completions
 """
 
 import requests
+import asyncio
 import os
 import logging
 from typing import List, Dict, Tuple, Any
@@ -135,6 +136,18 @@ class OpenAIProvider(BaseProvider):
             logger.warning(f"[OpenAI] Error listando modelos: {e}")
             return []
     
+    async def sync_model_context(self):
+        """Sincroniza modelo y contexto."""
+        pass
+
+    async def get_context_info(self) -> Dict[str, Any]:
+        """Retorna info del contexto."""
+        return {
+            "max": self.context_max,
+            "usable": self.usable,
+            "threshold": self.threshold
+        }
+
     async def check_connection(self) -> bool:
         """Verifica conexión con OpenAI."""
         return await asyncio.to_thread(self._check_connection_sync)

@@ -164,11 +164,11 @@ class LMStudioProvider(BaseProvider):
         punct = re.findall(r"[^\w\s]", text)
         return len(words) + len(punct)
     
-    def _get_context_length(self, model_id: str = None) -> int:
+    async def _get_context_length(self, model_id: str = None) -> int:
         """Obtiene el context_length del modelo."""
         model_id = model_id or self.model
         
-        models = self.list_models()
+        models = await self.list_models()
         for m in models:
             if m.get("id") == model_id:
                 return m.get("context_length", 32000)

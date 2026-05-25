@@ -251,10 +251,48 @@ class ContextManager:
         return before - after
     
     def emergency_truncate(self) -> List[Dict]:
-        """Truncamiento de emergencia - mantiene solo últimos mensajes."""
-        # Mantener: system + últimos 10 mensajes
+        """Truncamiento de emergencia basado en token budget (Sprint 3).
+        
+        En lugar de mantener un número fijo de mensajes (10), calcula un budget
+        de tokens para la ventana reciente y descarta mensajes antiguos hasta
+        cumplirlo. También aplica deduplicación semántica si es posible.
+        """
         system_msgs = [m for m in self.messages if m.get("role") == "system"]
-        recent = self.messages[-10:] if len(self.messages) > 10 else self.messages
+        non_system = [m for m in self.messages if m.get("role") != "system"]
+        
+        if not non_system:
+            self.messages = system_msgs
+            self.token_count = self.compactor._messages_tokens(self.messages)
+            return self.messages
+        
+        # Calcular budget para la ventana reciente: 40% del usable
+        recent_budget = int(self.usable * 0.40)
+        recent_budget = max(recent_budget, 500)  # Mínimo 500 tokens
+        
+        # Primero: deduplicación semántica agresiva
+        if len(non_system) > 10:
+            non_system = self.compactor.deduplicate_messages(non_system, threshold=0.6)
+        
+        # Segundo: token-based window de atrás hacia adelante
+        # (mantener el final de la conversación)
+        recent = []
+        tokens_used = 0
+        
+        for msg in reversed(non_system):
+            msg_tokens = self.compactor.count_tokens(msg.get("content", ""))
+            if tokens_used + msg_tokens <= recent_budget:
+                recent.insert(0, msg)
+                tokens_used += msg_tokens
+            else:
+                # Último mensaje parcial si hay espacio
+                remaining = recent_budget - tokens_used
+                if remaining > 20:
+                    content = msg.get("content", "")
+                    ratio = remaining / msg_tokens if msg_tokens > 0 else 0
+                    char_budget = int(len(content) * ratio)
+                    truncated = content[:max(char_budget, 20)] + "\n[TRUNCATED]"
+                    recent.insert(0, {"role": msg.get("role", "assistant"), "content": truncated})
+                break
         
         self.messages = system_msgs + recent
         self.token_count = self.compactor._messages_tokens(self.messages)
