@@ -42,8 +42,15 @@ def save_config(config):
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
 
-def is_port_open(port=8000):
+def get_server_port():
+    """Read server port from config, default to 8001."""
+    cfg = load_config()
+    return cfg.get("server_port", 8001)
+
+def is_port_open(port=None):
     """Check if the local server port is open."""
+    if port is None:
+        port = get_server_port()
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(0.5)
     try:
@@ -85,9 +92,10 @@ def print_banner():
     print(f"   {Colors.CYAN}--- CENTRO DE CONTROL CÓSMICO v1.4 ---{Colors.END}\n")
 
 def get_api_server_status():
-    if is_port_open(8000):
+    port = get_server_port()
+    if is_port_open(port):
         try:
-            r = requests.get("http://127.0.0.1:8000/api/status", timeout=0.5)
+            r = requests.get(f"http://127.0.0.1:{port}/api/status", timeout=0.5)
             if r.status_code == 200:
                 data = r.json()
                 return f"{Colors.GREEN}● ONLINE{Colors.END} (IA: {data.get('loaded_model', 'Desconocido')})"
@@ -337,11 +345,12 @@ def main():
             input("\nPresioná Enter para volver al menú...")
 
         elif choice == "2":
-            if is_port_open(8000):
-                print(f"\n{Colors.YELLOW}⚠️  Puerto 8000 ya está en uso. No se puede iniciar el servidor.{Colors.END}")
-                print(f"{Colors.YELLOW}   Detené el proceso actual o usá la opción 7 si lo controla este launcher.{Colors.END}")
+            port = get_server_port()
+            if is_port_open(port):
+                print(f"\n{Colors.YELLOW}⚠️  Puerto {port} ya está en uso. No se puede iniciar el servidor.{Colors.END}")
+                print(f"{Colors.YELLOW}   Detené el proceso actual o cambiá 'server_port' en config.json.{Colors.END}")
             else:
-                print(f"\n{Colors.BLUE}Iniciando servidor API en el puerto 8000...{Colors.END}")
+                print(f"\n{Colors.BLUE}Iniciando servidor API en el puerto {port}...{Colors.END}")
                 try:
                     server_process = subprocess.Popen(
                         [sys.executable, "server.py"],
