@@ -355,9 +355,11 @@ def main():
                     server_process = subprocess.Popen(
                         [sys.executable, "server.py"],
                         stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL
+                        stderr=subprocess.DEVNULL,
+                        cwd=os.path.dirname(os.path.abspath(__file__)) or "."
                     )
                     print(f"{Colors.GREEN}✓ Servidor iniciado (PID: {server_process.pid}){Colors.END}")
+                    print(f"{Colors.CYAN}🌐 Web UI: http://localhost:{port}{Colors.END}")
                     print(f"{Colors.YELLOW}  Usá la opción 7 del menú para detenerlo.{Colors.END}")
                 except Exception as e:
                     print(f"{Colors.RED}[ERROR] No se pudo iniciar el servidor: {e}{Colors.END}")
