@@ -456,7 +456,21 @@ class AntiAgent:
                         for url in found_urls:
                             if url not in extracted_sources.values():
                                 extracted_sources[len(extracted_sources) + 1] = url
-                                
+                    
+                    # CHAINING: if SEARCH ran, auto-execute WEB_READ on each result URL
+                    if tool_name == "SEARCH" and isinstance(result, str):
+                        found_urls = re.findall(r'URL: (https?://[^\s\n\]]+)', result)
+                        web_read_results = []
+                        # Limit to first 3 URLs to avoid excessive calls
+                        for i, url in enumerate(found_urls[:3]):
+                            print(f"{Colors.GREEN}[*] Auto-WEB_READ [{i+1}/{min(len(found_urls),3)}]: {url[:60]}...{Colors.END}")
+                            web_content = await self.plugin_manager.execute_tool("WEB_READ", url)
+                            web_read_results.append(f"\n--- WEB_READ [{i+1}] {url} ---\n{web_content}")
+                            current_step.setdefault("chained_reads", []).append(url[:80])
+                        
+                        if web_read_results:
+                            result += "\n\n" + "".join(web_read_results)
+                    
                     tool_context = f"[RESULTADO {tool_name}]\n{result}\n\nContinua con la tarea. Podes usar otra herramienta si necesitas mas informacion, o entrega la respuesta final."
                 else:
                     tool_triggered = True
