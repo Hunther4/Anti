@@ -1,6 +1,5 @@
 import os
 import json
-import webbrowser
 import threading
 import uuid
 import asyncio
