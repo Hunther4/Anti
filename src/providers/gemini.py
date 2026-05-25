@@ -159,6 +159,18 @@ class GeminiProvider(BaseProvider):
             logger.warning(f"[Gemini] Error listando modelos: {e}")
             return []
     
+    async def sync_model_context(self):
+        """Sincroniza modelo y contexto."""
+        pass
+
+    async def get_context_info(self) -> Dict[str, Any]:
+        """Retorna info del contexto."""
+        return {
+            "max": self.context_max,
+            "usable": self.usable,
+            "threshold": self.threshold
+        }
+
     async def check_connection(self) -> bool:
         """Verifica conexión con Gemini."""
         return await asyncio.to_thread(self._check_connection_sync)
@@ -208,7 +220,7 @@ class GeminiProvider(BaseProvider):
         # Aproximación: ~4 caracteres por token
         return len(text) // 4
     
-    def _get_context_length(self, model_id: str = None) -> int:
+    async def _get_context_length(self, model_id: str = None) -> int:
         """Obtiene el context_length del modelo."""
         model_id = model_id or self.model
         

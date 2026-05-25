@@ -37,13 +37,19 @@ class PluginManager:
             os.makedirs(self.plugins_dir)
             return
 
-        # Derivar el base_module asumiendo que estamos en la raíz del proyecto
-        # Si plugins_dir es absoluto, extraer la parte final
-        if os.path.isabs(self.plugins_dir):
-            rel_path = os.path.relpath(self.plugins_dir, os.getcwd())
-            base_module = rel_path.replace(os.sep, ".")
-        else:
-            base_module = self.plugins_dir.replace(os.sep, ".")
+        import sys
+        
+        # Resolve absolute path to plugins directory
+        abs_plugins_dir = os.path.abspath(self.plugins_dir)
+        
+        # Project root is the grand-parent of abs_plugins_dir (e.g. /workspace/src/plugins -> /workspace)
+        project_root = os.path.dirname(os.path.dirname(abs_plugins_dir))
+        
+        # Ensure project root is in sys.path for absolute imports
+        if project_root not in sys.path:
+            sys.path.insert(0, project_root)
+            
+        base_module = "src.plugins"
 
         for filename in os.listdir(self.plugins_dir):
             if filename.endswith(".py") and not filename.startswith("__"):

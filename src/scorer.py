@@ -30,31 +30,30 @@ def _sanitize_text(text: str) -> str:
 
 
 def _build_prm_judge_prompt(response_text: str, instruction_text: str) -> list[dict]:
-    """Construct the judge messages for PRM evaluation."""
+    """Construct the judge messages for PRM evaluation with short Chain-of-Thought reasoning."""
     system = (
-        "You are a quality reviewer for conversational responses.\n"
-        "You will be shown a user instruction and the assistant response to that instruction.\n"
-        "Based on instruction alignment and task completion quality, decide whether the response was "
-        "helpful (+1), unhelpful (-1), or unclear (0).\n"
-        "Do NOT compare against any follow-up turn.\n"
-        "Only evaluate whether the response addresses the given instruction.\n"
-        "Use +1 when the response clearly follows and substantially completes the instruction.\n"
-        "Use -1 when the response is off-task, wrong, or fails to complete core requirements.\n"
-        "Use 0 when completion is ambiguous or evidence is insufficient.\n"
-        "Think briefly, then end your reply with exactly one of: Score: 1 / Score: -1 / Score: 0"
+        "You are a response quality judge. Evaluate the response quality and then output a final score.\n\n"
+        "First, write a 1-2 sentence brief analysis of the response quality (accuracy, completeness, and context alignment).\n"
+        "Then, output the final score exactly in this format on a new line:\n"
+        "Score: 1 = The response answers the instruction correctly, OR is a natural conversational reply (e.g. 'hello', 'thanks').\n"
+        "Score: 0 = The response is partially correct but incomplete, vague, or lacks details.\n"
+        "Score: -1 = The response is wrong, hallucinated, unsafe, or ignores the instruction.\n\n"
+        "Example output:\n"
+        "Analysis: The response perfectly satisfies all file-writing tasks.\n"
+        "Score: 1"
     )
     clean_instruction = _sanitize_text(instruction_text)
-    clean_response = _sanitize_text(response_text)
+    clean_response = _sanitize_text(response_text[:1500])  # Cap response length to save tokens
     user = (
-        f"Instruction:\n{clean_instruction}\n\n"
-        f"Response:\n{clean_response}\n\n"
-        "Was the response helpful for this instruction? "
-        "End with Score: 1, Score: -1, or Score: 0."
+        f"Instruction: {clean_instruction}\n\n"
+        f"Response: {clean_response}\n\n"
+        "Provide your Analysis and final Score:"
     )
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
 def _parse_prm_score(text: str) -> Optional[int]:
+    # Si el modelo local inyecta etiquetas think o texto extra, buscamos la expresión regular
     matches = _SCORE_RE.findall(text)
     if matches:
         val = int(matches[-1])
@@ -65,6 +64,14 @@ def _parse_prm_score(text: str) -> Optional[int]:
         val = int(matches[-1])
         if val in (1, -1, 0):
             return val
+    # Fallback si responde con el número directamente
+    for word in text.split():
+        if word in ("1", "+1"):
+            return 1
+        elif word in ("-1",):
+            return -1
+        elif word in ("0",):
+            return 0
     return None
 
 
@@ -85,8 +92,8 @@ class PRMScorer:
         prm_url: str,
         prm_model: str = "local-model",
         prm_m: int = 1,
-        temperature: float = 0.6,
-        max_new_tokens: int = 1024,
+        temperature: float = 0.5,
+        max_new_tokens: int = 50,
     ):
         self.prm_url = f"{prm_url.rstrip('/')}/chat/completions"
         self.prm_model = prm_model

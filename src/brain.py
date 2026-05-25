@@ -2,8 +2,13 @@ import requests
 import asyncio
 import re
 import logging
+import json
+
+from src.logger import AppLogger
+from src.exceptions import BrainConnectionError, BrainContextError, AntiError as BrainError
 
 logger = logging.getLogger(__name__)
+app_logger = AppLogger(__name__)
 
 
 # --- MCP Tool Registry (v1.0) ---
@@ -62,12 +67,9 @@ class Brain:
         
         # Context-aware config (v0.5)
         self.context_max = 32000
-        self.reserved_system = 8000
-        self.reserved_completion = 4000
         self.usable_threshold = 0.85
-        self.usable = self.context_max - self.reserved_system - self.reserved_completion
-        self.threshold = int(self.usable * self.usable_threshold)
         self.last_prompt_tokens = 0
+        self._update_threshold()
 
     def _get_session(self):
         if self._session is None:
@@ -89,10 +91,8 @@ class Brain:
             "stream": False
         }
         
-        import json
         payload_size = len(json.dumps(payload))
         
-        last_error = None
         for attempt in range(self.max_retries):
             try:
                 import time
@@ -105,15 +105,14 @@ class Brain:
                 data = response.json()
                 content = data['choices'][0]['message']['content']
                 
-                # v1.4 Sentinel Fix: Robust usage parsing (Auto-Audit Recommendation)
+                # v1.4 Sentinel Fix: Robust usage parsing
                 usage_raw = data.get('usage', {})
                 try:
                     prompt_tokens = max(int(usage_raw.get('prompt_tokens', 0)), 0)
                     completion_tokens = max(int(usage_raw.get('completion_tokens', 0)), 0)
                     total_tokens = max(int(usage_raw.get('total_tokens', 0)), 0)
                 except (ValueError, TypeError):
-                    # Fallback to regex count if server data is corrupt
-                    logger.warning("Sentinel Warning: Data corruption in 'usage'. Using Regex Fallback.")
+                    app_logger.warning("Sentinel Warning: Data corruption in 'usage'. Using Regex Fallback.")
                     prompt_tokens = self.count_tokens(str(messages))
                     completion_tokens = self.count_tokens(content)
                     total_tokens = prompt_tokens + completion_tokens
@@ -126,20 +125,15 @@ class Brain:
                     'tps': (completion_tokens / (end_time - start_time)) if (end_time - start_time) > 0 else 0
                 }
                 
-                duration = end_time - start_time
-                tps = completion_tokens / duration if duration > 0 else 0
-                
-                # Update context info based on response (if model provides context info)
-                # Note: 'usage' doesn't give context_length, but we store current prompt size
                 self.last_prompt_tokens = prompt_tokens
                 
                 return content, usage
             except Exception as e:
-                last_error = e
                 if attempt < self.max_retries - 1:
+                    import time
                     time.sleep(2 * (2 ** attempt))
-                    
-        return "Error conectando con LM Studio...", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "duration": 0, "tps": 0}
+                else:
+                    raise BrainConnectionError(f"Failed to connect to LLM server after {self.max_retries} attempts: {e}")
 
     async def get_context_info(self):
         """Retorna información detallada sobre el contexto del modelo (v0.4 CORREGIDO)."""
@@ -152,9 +146,9 @@ class Brain:
                 self.context_max = model_data.get('context_length', self.context_max)
                 self.model = model_data.get('id', self.model)
         except requests.RequestException as e:
-            logger.warning(f"[Brain] Error fetching model info: {e}")
+            app_logger.warning(f"[Brain] Error fetching model info: {e}")
         except json.JSONDecodeError as e:
-            logger.warning(f"[Brain] Invalid JSON from API: {e}")
+            app_logger.warning(f"[Brain] Invalid JSON from API: {e}")
 
         # v0.4 CORREGIDO: NUNCA negativo
         usable = self.context_max - self.reserved_system - self.reserved_completion
@@ -181,14 +175,12 @@ class Brain:
             res = requests.get(f"{self.base_url}/models", timeout=5)
             return res.status_code == 200
         except requests.RequestException as e:
-            logger.warning(f"[Brain] Connection check failed: {e}")
+            app_logger.warning(f"[Brain] Connection check failed: {e}")
             return False
 
     def _update_thresholds(self):
         """Recalcula los límites tras un cambio de contexto."""
-        self.usable = max(self.context_max - self.reserved_system - self.reserved_completion, 0)
-        self.threshold = int(self.usable * self.usable_threshold)
-        self.threshold = max(self.threshold, int(self.usable * 0.5))
+        self._update_threshold()
 
     # ==================== v0.4: Token Counting ====================
     
@@ -272,12 +264,12 @@ class Brain:
                 
                 changed = False
                 if new_model != self.model:
-                    logger.info(f"Model changed: {self.model} → {new_model}")
+                    app_logger.info(f"Model changed: {self.model} → {new_model}")
                     self.model = new_model
                     changed = True
                 
                 if new_context != old_context:
-                    logger.info(f"Context changed: {old_context} → {new_context}")
+                    app_logger.info(f"Context changed: {old_context} → {new_context}")
                     self.context_max = new_context
                     self._update_threshold()
                     changed = True
@@ -285,15 +277,72 @@ class Brain:
                 return {"changed": changed, "old_context": old_context, "new_context": self.context_max, "model": self.model}
                     
         except Exception as e:
-            logger.warning(f"Context sync failed: {e}")
+            app_logger.warning(f"Context sync failed: {e}")
         
         return {"changed": False}
     
     def _update_threshold(self):
         """Recalcula threshold después de cambio de contexto."""
+        if self.context_max < 8192:
+            self.reserved_system = 500
+            self.reserved_completion = 1000
+        elif self.context_max < 32768:
+            self.reserved_system = 1500
+            self.reserved_completion = 3000
+        else:
+            self.reserved_system = 2000
+            self.reserved_completion = 4000
+        
         usable = self.context_max - self.reserved_system - self.reserved_completion
         usable = max(usable, 0)
         
         self.usable = usable
         self.threshold = int(usable * 0.85)
         self.threshold = max(self.threshold, int(usable * 0.5))
+
+    # ==================== v1.0: Active Coordination ====================
+    
+    def prepare_messages(self, system_prompt, history, max_chunks=5):
+        """
+        Prepares messages for the LLM, applying U-shape ordering to conversation history
+        if it's fragmented into chunks for context management.
+        """
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        if not history:
+            return messages
+            
+        # If history is too long, we split it into chunks
+        # For now, we treat the whole history as one chunk unless specified
+        # In a real scenario, we'd split by tokens
+        chunks = [history]
+        
+        # Apply U-shape order if we have multiple chunks
+        if len(chunks) > 3:
+            chunks = self.ushape_order(chunks)
+            
+        for chunk in chunks:
+            messages.extend(chunk)
+            
+        return messages
+
+    def process_response(self, response_text):
+        """
+        Processes the LLM response to detect tool calls and route them.
+        Returns a tuple (is_tool_call, tool_name, tool_args, final_text).
+        """
+        # Regex to detect <tool_call name="tool_name">{"arg": "val"}</tool_call>
+        tool_pattern = r'<tool_call name="([^"]+)">(\{.*?\})</tool_call>'
+        match = re.search(tool_pattern, response_text, re.DOTALL)
+        
+        if match:
+            tool_name = match.group(1)
+            try:
+                tool_args = json.loads(match.group(2))
+                return True, tool_name, tool_args, response_text
+            except json.JSONDecodeError as e:
+                app_logger.error(f"[Brain] Failed to parse tool arguments: {e}")
+                return False, None, None, response_text
+        
+        return False, None, None, response_text
+

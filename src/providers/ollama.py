@@ -173,10 +173,7 @@ class OllamaProvider(BaseProvider):
         ollama_msgs = []
         
         for msg in messages:
-            if msg.get("role") == "system":
-                # Ollama no tiene systemMessages, agregar al inicio como user
-                continue
-            
+            # Preservamos el rol 'system' porque Ollama lo soporta nativamente.
             ollama_msgs.append({
                 "role": msg.get("role", "user"),
                 "content": msg.get("content", "")
@@ -202,12 +199,12 @@ class OllamaProvider(BaseProvider):
             "threshold": self.threshold
         }
 
-    def _get_context_length(self, model_id: str = None) -> int:
+    async def _get_context_length(self, model_id: str = None) -> int:
         """Obtiene el context_length del modelo."""
         model_id = model_id or self._model
         
         # Intentar de las美国的 models
-        models = self.list_models()
+        models = await self.list_models()
         for m in models:
             if m.get("id") == model_id or m.get("name", "").startswith(model_id):
                 return m.get("context_length", 8192)

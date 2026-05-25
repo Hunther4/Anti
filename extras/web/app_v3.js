@@ -385,13 +385,104 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
+    // --- Telemetry Section ---
+    async function updateTelemetry() {
+        try {
+            const res = await fetch("/api/telemetry?t=" + Date.now());
+            const data = await res.json();
+            
+            document.getElementById("tel-tps").textContent = data.average_tps || "0.0";
+            document.getElementById("tel-cache").textContent = Math.round((data.cache_hit_ratio || 0) * 100) + "%";
+            
+            const usedContext = Math.round((data.context_max - data.context_usable) / data.context_max * 100);
+            document.getElementById("tel-context").textContent = Math.max(0, Math.min(100, usedContext)) + "%";
+            document.getElementById("tel-skills").textContent = data.skills_count || "0";
+        } catch (e) {
+            console.warn("Error cargando telemetría:", e);
+        }
+    }
+
+    // --- Knowledge Graph Section ---
+    async function updateKnowledgeGraph() {
+        const loader = document.getElementById("graph-loader");
+        const container = document.getElementById("mermaid-graph-container");
+        try {
+            const res = await fetch("/api/knowledge_graph?t=" + Date.now());
+            const data = await res.json();
+            
+            if (!data.nodes || data.nodes.length === 0) {
+                container.innerHTML = "<div style='color:var(--text-secondary);font-size:12px;text-align:center;padding:24px;'>Aún no hay conceptos mapeados en el grafo.</div>";
+                if (loader) loader.classList.add("hidden");
+                return;
+            }
+            
+            // Build Mermaid markup
+            let mermaidCode = "graph TD\n";
+            mermaidCode += "  classDef concept fill:#00f0ff22,stroke:#00f0ff,stroke-width:2px,color:#fff;\n";
+            mermaidCode += "  classDef default fill:#0f0f14,stroke:#ff003c,stroke-width:1px,color:#94a3b8;\n";
+            
+            const maxNodes = data.nodes.slice(0, 12);
+            const nodeIds = new Set(maxNodes.map(n => n.id));
+            
+            maxNodes.forEach(node => {
+                const cleanValue = node.value.replace(/["'()\[\]{}]/g, "");
+                mermaidCode += `  N${node.id}["${cleanValue}"]\n`;
+                mermaidCode += `  class N${node.id} concept;\n`;
+            });
+            
+            let edgeCount = 0;
+            if (data.edges) {
+                data.edges.forEach(edge => {
+                    if (nodeIds.has(edge.source_id) && nodeIds.has(edge.target_id) && edgeCount < 15) {
+                        const relType = edge.relation_type || "rel";
+                        mermaidCode += `  N${edge.source_id} -->|"${relType}"| N${edge.target_id}\n`;
+                        edgeCount++;
+                    }
+                });
+            }
+            
+            if (edgeCount === 0 && maxNodes.length > 1) {
+                for (let i = 1; i < maxNodes.length; i++) {
+                    mermaidCode += `  N${maxNodes[i-1].id} -.-> N${maxNodes[i].id}\n`;
+                }
+            }
+            
+            container.innerHTML = `<div class="mermaid" id="dynamic-mermaid">${mermaidCode}</div>`;
+            if (loader) loader.classList.add("hidden");
+            
+            mermaid.init(undefined, container.querySelectorAll(".mermaid"));
+        } catch (e) {
+            console.error("Error al renderizar el grafo semántico:", e);
+            if (loader) {
+                loader.textContent = "Error de conexión";
+                loader.classList.remove("hidden");
+            }
+        }
+    }
+
+    document.getElementById("refresh-graph-btn").addEventListener("click", () => {
+        const loader = document.getElementById("graph-loader");
+        if (loader) {
+            loader.textContent = "Generando mapa relacional...";
+            loader.classList.remove("hidden");
+        }
+        updateKnowledgeGraph();
+        updateTelemetry();
+    });
+
     // Init
     updateStatus();
     updateFiles();
     updateLectura();
     updateMCPs();
-    setInterval(updateStatus, 60000);
-    setInterval(updateLectura, 120000); // Cada 2 minutos
+    updateTelemetry();
+    updateKnowledgeGraph();
+    
+    // Polling Intervals
+    setInterval(updateStatus, 30000); // 30 segundos
+    setInterval(updateTelemetry, 5000); // 5 segundos para telemetría ágil!
+    setInterval(updateKnowledgeGraph, 15000); // 15 segundos para el grafo semántico!
+    setInterval(updateLectura, 60000); // 1 minuto para lectura
 
     // --- MCP Section ---
     async function updateMCPs() {

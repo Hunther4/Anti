@@ -27,4 +27,3 @@ def build_system_prompt(name: str, personality: str, omni_context: str = "", dyn
     )
 
     return prompt
-

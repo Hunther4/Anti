@@ -9,5 +9,8 @@
   "max_iterations": 10,
   "timeout": 300,
   "auto_reflect_every_n_tasks": 5,
-  "report_format": "Vane Style"
+  "report_format": "Vane Style",
+  "enable_prm_scorer": true,
+  "max_history_len_local": 10,
+  "max_history_len_cloud": 100
 }

@@ -4,11 +4,114 @@ import re
 import logging
 from datetime import datetime
 
+from src.logger import AppLogger
+from src.exceptions import MemoryError
+
 logger = logging.getLogger(__name__)
+app_logger = AppLogger(__name__)
 
 from src.skills import SkillManager
 from src.archive import ArchiveManager
 import hashlib
+
+import math
+import string
+
+class TFIDFContextRanker:
+    """
+    Ranker TF-IDF nativo de cero dependencias para búsquedas semánticas.
+    """
+    def __init__(self, stopwords=None):
+        if stopwords is None:
+            self.stopwords = {
+                "el", "la", "los", "las", "un", "una", "unos", "unas", "de", "del", "al", "a", "ante",
+                "bajo", "con", "contra", "de", "desde", "en", "entre", "hacia", "hasta", "para", "por",
+                "segun", "sin", "sobre", "tras", "y", "o", "e", "u", "pero", "mas", "que", "como",
+                "the", "and", "of", "to", "a", "in", "for", "is", "on", "that", "by", "this", "with",
+                "i", "you", "he", "she", "it", "we", "they", "me", "him", "her", "us", "them", "che"
+            }
+        else:
+            self.stopwords = set(stopwords)
+
+    def _tokenize(self, text: str) -> list:
+        if not text:
+            return []
+        text = text.lower()
+        # Remove punctuation
+        text = text.translate(str.maketrans("", "", string.punctuation))
+        words = text.split()
+        return [w for w in words if w not in self.stopwords and len(w) > 1]
+
+    def rank(self, query: str, documents: list, top_k: int = 5) -> list:
+        """
+        Rankea documentos según similitud coseno con la query usando pesos TF-IDF.
+        Cada documento espera: [{"id": x, "content": "..."}]
+        Retorna los documentos ordenados con una clave adicional "semantic_score".
+        """
+        query_tokens = self._tokenize(query)
+        if not query_tokens or not documents:
+            return []
+
+        total_docs = len(documents)
+        doc_tfs = []  
+        word_df = {}  
+
+        for doc in documents:
+            content = doc.get("content", "")
+            tokens = self._tokenize(content)
+            
+            tf = {}
+            if tokens:
+                for token in tokens:
+                    tf[token] = tf.get(token, 0) + 1
+                for token in tf:
+                    tf[token] = tf[token] / len(tokens)
+                    word_df[token] = word_df.get(token, 0) + 1
+            doc_tfs.append(tf)
+
+        query_idf = {}
+        for token in set(query_tokens):
+            df = word_df.get(token, 0)
+            query_idf[token] = math.log(1 + (total_docs / (1 + df)))
+
+        query_tf = {}
+        for token in query_tokens:
+            query_tf[token] = query_tf.get(token, 0) + 1
+        for token in query_tf:
+            query_tf[token] = (query_tf[token] / len(query_tokens)) * query_idf[token]
+
+        ranked_docs = []
+        for idx, doc in enumerate(documents):
+            tf = doc_tfs[idx]
+            doc_tfidf = {}
+            for token in tf:
+                if token in query_idf:
+                    doc_tfidf[token] = tf[token] * query_idf[token]
+
+            dot_product = 0.0
+            doc_magnitude_sq = 0.0
+            query_magnitude_sq = sum(val * val for val in query_tf.values())
+
+            for token, q_val in query_tf.items():
+                d_val = doc_tfidf.get(token, 0.0)
+                dot_product += q_val * d_val
+
+            for val in doc_tfidf.values():
+                doc_magnitude_sq += val * val
+
+            doc_magnitude = math.sqrt(doc_magnitude_sq)
+            query_magnitude = math.sqrt(query_magnitude_sq)
+
+            score = 0.0
+            if doc_magnitude > 0 and query_magnitude > 0:
+                score = dot_product / (doc_magnitude * query_magnitude)
+
+            doc_copy = dict(doc)
+            doc_copy["semantic_score"] = score
+            ranked_docs.append(doc_copy)
+
+        ranked_docs.sort(key=lambda x: x["semantic_score"], reverse=True)
+        return ranked_docs[:top_k]
 
 class MemoryManager:
     # Default: keep max 5000 log lines (rotate older)
@@ -111,15 +214,17 @@ class MemoryManager:
         """Guarda el engram directamente en la base de datos unificada SQLite."""
         clean_topic = topic.lower().replace(".json", "").replace(".md", "").replace(" ", "_").replace("/", "_")
         
-        # Guardar en SQLite (Hot & Cold unificado)
-        success = self.archive.archive_engram(topic, content)
+        try:
+            # Guardar en SQLite (Hot & Cold unificado)
+            self.archive.archive_engram(topic, content)
+        except MemoryError as e:
+            app_logger.error(f"Failed to save engram '{topic}': {e}")
+            return f"Error al guardar Engram '{topic}'."
         
         # Phase 3: Auto-extract entities para el Knowledge Graph
         self._auto_extract_entities(clean_topic, content)
         
-        if success:
-            return f"Engram '{topic}' guardado en SQLite y extraído al Knowledge Graph."
-        return f"Error al guardar Engram '{topic}'."
+        return f"Engram '{topic}' guardado en SQLite y extraído al Knowledge Graph."
 
     def _auto_extract_entities(self, topic, content):
         """
@@ -184,7 +289,7 @@ class MemoryManager:
                         self.archive.add_entity(obs_id, entity_type, match.strip()[:200])
                         
         except Exception as e:
-            logger.warning(f"[Memory] Error en auto-extracción: {e}")
+            app_logger.exception(f"[Memory] Error en auto-extracción para '{topic}'")
 
     def _simple_bm25_score(self, query_words, content_lower):
         """Versión simplificada de BM25 para ranking de relevancia."""
@@ -213,7 +318,7 @@ class MemoryManager:
                 with open(self.usage_stats_path, "r") as f:
                     stats = json.load(f)
             except (json.JSONDecodeError, IOError) as e:
-                logger.warning(f"[Memory] Error reading usage stats: {e}")
+                app_logger.warning(f"[Memory] Error reading usage stats: {e}")
         
         if topic not in stats:
             stats[topic] = {"usos": 0, "fallos": 0, "ultimo_uso": ""}
@@ -233,7 +338,7 @@ class MemoryManager:
             with open(self.usage_stats_path, "r") as f:
                 stats = json.load(f)
         except (json.JSONDecodeError, IOError) as e:
-            logger.warning(f"[Memory] Error reading stats for decay: {e}")
+            app_logger.warning(f"[Memory] Error reading stats for decay: {e}")
             return 0
             
         deleted_count = 0
@@ -292,32 +397,46 @@ class MemoryManager:
             with open(filepath, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=4)
         except Exception as e:
-            logger.warning(f"[Memory] Error updating engram access: {e}")
+            app_logger.exception(f"[Memory] Error updating engram access: {e}")
         
         return full_score
 
     def search_engrams(self, query):
         """
-        Busca engrams usando el backend unificado FTS5 (SQLite).
+        Busca engrams usando el backend unificado FTS5 (SQLite) + TF-IDF semántico.
         Maneja scoring y tracking delegando a self.archive.
         """
         self.last_retrieved_topics = []
         if not query.strip():
             return "Consulta vacia."
             
-        results = self.archive.search_archive(query, limit=5)
-        
-        if not results:
+        # 1. Obtener candidatos de SQLite
+        candidates = self.archive.search_archive(query, limit=20)
+        if not candidates:
             return "No se encontraron engrams relevantes."
+
+        # 2. Utilizar el ranker TF-IDF para ordenar semánticamente los candidatos
+        docs = []
+        for c in candidates:
+            docs.append({
+                "original": c,
+                "content": f"{c.get('topic', '')} {c.get('content', '')}"
+            })
             
-        # U-Shape Ordering: [Top 1, Top 3, ..., Top 2]
+        ranker = TFIDFContextRanker()
+        ranked = ranker.rank(query, docs, top_k=5)
+        
+        # 3. U-Shape Ordering del top 5
         final_results = []
-        for i, res in enumerate(results):
-            topic = res['topic']
+        for i, doc in enumerate(ranked):
+            c = doc["original"]
+            topic = c['topic']
             self.last_retrieved_topics.append(topic)
-            content = res['content']
+            content = c['content']
             snippet = content[:1000] + ("..." if len(content) > 1000 else "")
-            formatted = f"--- Engram: {topic} (Relevancia: {res['score']:.2f}) ---\n{snippet}"
+            
+            semantic_weight = doc["semantic_score"]
+            formatted = f"--- Engram: {topic} (Relevancia Semántica: {semantic_weight:.2f}) ---\n{snippet}"
             
             if i % 2 == 0:
                 final_results.append(formatted)
@@ -335,7 +454,7 @@ class MemoryManager:
                     os.remove(full_path)
                     count += 1
             except OSError as e:
-                logger.warning(f"[Memory] Error removing {f}: {e}")
+                app_logger.warning(f"[Memory] Error removing {f}: {e}")
         return count
 
     def retrieve_omni_context(self, query: str) -> str:
@@ -356,31 +475,51 @@ class MemoryManager:
         if "No se encontraron engrams" not in engrams_raw and "Consulta vacia" not in engrams_raw:
             omni_parts.append(f"### ENGRAMS (Conocimiento Previo):\n{engrams_raw}")
 
-        # 3. Workspace .md Files (Local Context)
+        # 3. Workspace Files (Recursive & Semantic TF-IDF)
         if self.workspace_path and os.path.exists(self.workspace_path):
-            query_words = query.lower().split()
-            scored_files = []
-            for filename in os.listdir(self.workspace_path):
-                if filename.endswith(".md"):
-                    filepath = os.path.join(self.workspace_path, filename)
-                    try:
-                        with open(filepath, "r", encoding="utf-8") as f:
-                            content = f.read()
-                            content_lower = content.lower()
-                            score = sum(content_lower.count(w) for w in query_words)
-                            if score > 0:
-                                scored_files.append((filename, score, content))
-                    except (IOError, UnicodeDecodeError) as e:
-                        logger.warning(f"[Memory] Error reading workspace file {filename}: {e}")
+            valid_extensions = {".md", ".py", ".go", ".js", ".ts", ".json", ".rs", ".sh"}
+            ignored_dirs = {".git", "__pycache__", "venv", "node_modules", "build", "dist", ".engram", "extras"}
             
-            if scored_files:
-                scored_files.sort(key=lambda x: x[1], reverse=True)
-                md_output = []
-                for fname, score, content in scored_files[:2]:
-                    snippet = content[:800] + "..." if len(content) > 800 else content
-                    md_output.append(f"- Archivo Local '{fname}' (Relevancia: {score}):\n{snippet}")
+            workspace_docs = []
+            for root, dirs, files in os.walk(self.workspace_path):
+                dirs[:] = [d for d in dirs if d not in ignored_dirs]
                 
-                omni_parts.append(f"### ARCHIVOS LOCALES (.md):\n" + "\n".join(md_output))
+                rel_path = os.path.relpath(root, self.workspace_path)
+                if rel_path != "." and len(rel_path.split(os.sep)) > 4:
+                    continue
+                    
+                for file in files:
+                    _, ext = os.path.splitext(file)
+                    if ext.lower() in valid_extensions:
+                        filepath = os.path.join(root, file)
+                        try:
+                            if os.path.getsize(filepath) < 102400: # Max 100KB to keep memory usage low
+                                with open(filepath, "r", encoding="utf-8") as f:
+                                    content = f.read()
+                                    if content.strip():
+                                        workspace_docs.append({
+                                            "filename": os.path.relpath(filepath, self.workspace_path),
+                                            "content": content
+                                        })
+                        except Exception as e:
+                            app_logger.debug(f"Error reading workspace file {filepath}: {e}")
+                            pass
+            
+            if workspace_docs:
+                ranker = TFIDFContextRanker()
+                ranked_workspace = ranker.rank(query, workspace_docs, top_k=3)
+                
+                md_output = []
+                for doc in ranked_workspace:
+                    if doc["semantic_score"] > 0.05: # Minimum relevance threshold
+                        fname = doc["filename"]
+                        score = doc["semantic_score"]
+                        content = doc["content"]
+                        snippet = content[:800] + "..." if len(content) > 800 else content
+                        md_output.append(f"- Archivo '{fname}' (Similitud Semántica: {score:.2f}):\n{snippet}")
+                
+                if md_output:
+                    omni_parts.append(f"### ARCHIVOS LOCALES RELEVANTES:\n" + "\n".join(md_output))
 
         # 4. Cold Archive (Long-term Factual)
         archive_results = self.archive.search_archive(query, limit=3)
@@ -466,12 +605,12 @@ class MemoryManager:
         
         try:
             entity_id = self.archive.add_entity(observation_id, entity_type, value.strip())
-            if entity_id:
-                logger.info(f"[Memory] Entidad creada: {entity_type}={value[:50]} (id={entity_id})")
-                return {"success": True, "entity_id": entity_id, "message": f"Entidad {entity_type} creada"}
-            return {"success": False, "entity_id": None, "message": "Error guardando entidad"}
+            app_logger.info(f"[Memory] Entidad creada: {entity_type}={value[:50]} (id={entity_id})")
+            return {"success": True, "entity_id": entity_id, "message": f"Entidad {entity_type} creada"}
+        except MemoryError:
+            raise
         except Exception as e:
-            logger.error(f"[Memory] Error create_entity: {e}")
+            app_logger.exception(f"[Memory] Error create_entity: {e}")
             return {"success": False, "entity_id": None, "message": str(e)}
 
     def create_edge(self, source_id: int, target_id: int, relation_type: str) -> dict:
@@ -494,10 +633,10 @@ class MemoryManager:
         
         try:
             edge_id = self.archive.add_edge(source_id, target_id, relation_type)
-            if edge_id:
-                logger.info(f"[Memory] Edge creado: {source_id} --[{relation_type}]--> {target_id} (id={edge_id})")
-                return {"success": True, "edge_id": edge_id, "message": f"Edge {relation_type} creado"}
-            return {"success": False, "edge_id": None, "message": "Error guardando edge"}
+            app_logger.info(f"[Memory] Edge creado: {source_id} --[{relation_type}]--> {target_id} (id={edge_id})")
+            return {"success": True, "edge_id": edge_id, "message": f"Edge {relation_type} creado"}
+        except MemoryError:
+            raise
         except Exception as e:
-            logger.error(f"[Memory] Error create_edge: {e}")
+            app_logger.exception(f"[Memory] Error create_edge: {e}")
             return {"success": False, "edge_id": None, "message": str(e)}

@@ -226,6 +226,11 @@ class MemoryConsolidator:
                 with open(os.path.join(new_dir, "SKILL.md"), 'w') as f:
                     f.write(merged['content'])
                 count += 1
+        
+        if count > 0:
+            self.memory.skills.reload()
+            logger.info("Caché de Skills recargado exitosamente en MemoryManager.")
+            
         return count
 
     async def _ask_llm_to_merge_skills(self, contents: List[str]):
