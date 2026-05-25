@@ -148,26 +148,46 @@ class HybridCompactor:
     
     def _call_llm(self, prompt: str, max_tokens: int = 256) -> Optional[str]:
         """Call a local LLM via HTTP endpoint (LM Studio / LocalAI compatible)."""
+        import time
+
         base_url = self.config.get("llm_base_url", "http://127.0.0.1:1234/v1")
         model = self.config.get("llm_model", "local-model")
         url = f"{base_url.rstrip('/')}/chat/completions"
-        
+
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
             "temperature": 0.3,
         }
-        
-        try:
-            resp = requests.post(url, json=payload, timeout=30)
-            resp.raise_for_status()
-            data = resp.json()
-            content = data["choices"][0]["message"]["content"]
-            return content.strip()
-        except Exception as e:
-            logger.warning(f"[Compactor] LLM summary call failed: {e}")
-            return None
+
+        session = requests.Session()
+        max_retries = 3
+
+        for attempt in range(max_retries):
+            try:
+                resp = session.post(url, json=payload, timeout=30)
+                resp.raise_for_status()
+                data = resp.json()
+                content = data["choices"][0]["message"]["content"]
+                return content.strip()
+            except requests.exceptions.HTTPError as e:
+                status = e.response.status_code if e.response is not None else 0
+                if status in (429, 503) and attempt < max_retries - 1:
+                    wait = (2 ** attempt) * 0.5
+                    logger.warning(
+                        f"[Compactor] LLM returned {status}, "
+                        f"retrying in {wait:.1f}s (attempt {attempt+1}/{max_retries})"
+                    )
+                    time.sleep(wait)
+                    continue
+                logger.warning(f"[Compactor] LLM summary call failed: {e}")
+                return None
+            except Exception as e:
+                logger.warning(f"[Compactor] LLM summary call failed: {e}")
+                return None
+
+        return None
     
     def _auto_summary(self, messages: List[Dict]) -> str:
         """
@@ -445,7 +465,12 @@ Mejora los compression guidelines.
             return model.encode([text], convert_to_tensor=False)[0]
         
         if kind == "tfidf" and model is not None:
-            return model.fit_transform([text])
+            # Fit once on first call, then transform against that vocabulary.
+            # Without this, every call creates a different feature space and
+            # cosine_similarity between independently-fit vectors is meaningless.
+            if not hasattr(model, "vocabulary_"):
+                model.fit([text])
+            return model.transform([text])
         
         return None
     
@@ -464,7 +489,7 @@ Mejora los compression guidelines.
             return float(np.dot(vec1, vec2) / (norm1 * norm2))
         
         # TF-IDF → sparse matrices
-        if hasattr(vec1, "toarray"):
+        if hasattr(vec1, "toarray") and _HAS_SKLEARN:
             return float(cosine_similarity(vec1, vec2)[0][0])
         
         return 0.0

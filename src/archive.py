@@ -2,13 +2,12 @@ import sqlite3
 import json
 import os
 import math
+import re
 from datetime import datetime
-import logging
 
 from src.logger import AppLogger
 from src.exceptions import MemoryError
 
-logger = logging.getLogger(__name__)
 app_logger = AppLogger(__name__)
 
 # Phase 2.2: Core Scoring Logic
@@ -33,7 +32,11 @@ class ArchiveManager:
     Almacena engrams antiguos y logs extensos en una base de datos SQLite
     para mantener el 'Hot Path' (JSONs) liviano y rápido.
     """
-    
+
+    VALID_RELATION_TYPES = frozenset({
+        "references", "relates_to", "follows", "supersedes", "contradicts"
+    })
+
     def __init__(self, db_path):
         self.db_path = db_path
         self._conn = None
@@ -46,7 +49,18 @@ class ArchiveManager:
             self._conn.execute("PRAGMA journal_mode = WAL")
             self._conn.execute("PRAGMA foreign_keys = ON")
             self._conn.execute("PRAGMA synchronous = NORMAL")
+            self._conn.execute("PRAGMA busy_timeout = 5000")
         return self._conn
+
+    def close(self):
+        """Close the SQLite connection, checkpointing WAL first."""
+        if self._conn:
+            try:
+                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
 
     def _init_db(self):
         """Inicializa las tablas si no existen."""
@@ -133,6 +147,7 @@ class ArchiveManager:
 
     def archive_engram(self, topic, content, importance=0.5, tags=""):
         """Mueve un engram al archivo frío."""
+        # NOTE: parameter 'importance' maps to column 'importance_score'
         try:
             conn = self._get_conn()
             cursor = conn.cursor()
@@ -152,7 +167,6 @@ class ArchiveManager:
         Phase 2.3: Actualiza last_accessed_at, aplica accessBonus y recalcula score.
         """
         try:
-            import re
             conn = self._get_conn()
             cursor = conn.cursor()
             
@@ -234,10 +248,9 @@ class ArchiveManager:
         try:
             conn = self._get_conn()
             cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM engram_archive")
-            engrams = cursor.fetchone()[0]
-            cursor.execute("SELECT COUNT(*) FROM log_history")
-            logs = cursor.fetchone()[0]
+            cursor.execute("SELECT (SELECT COUNT(*) FROM engram_archive), (SELECT COUNT(*) FROM log_history)")
+            row = cursor.fetchone()
+            engrams, logs = row[0], row[1]
             return {"archived_engrams": engrams, "historical_logs": logs}
         except Exception as e:
             app_logger.exception("[Archive] Error obteniendo stats")
@@ -306,7 +319,7 @@ class ArchiveManager:
             # Primero verificar que existe
             cursor.execute("SELECT id FROM engram_archive WHERE id = ?", (observation_id,))
             if not cursor.fetchone():
-                logger.warning(f"[Archive] Observación no encontrada: {observation_id}")
+                app_logger.warning(f"[Archive] Observación no encontrada: {observation_id}")
                 return False
                 
             # Actualizar score + actualizar last_accessed_at
@@ -341,14 +354,19 @@ class ArchiveManager:
         try:
             conn = self._get_conn()
             cursor = conn.cursor()
-            placeholders = ",".join("?" * len(observation_ids))
+            ids = observation_ids
+            placeholders = ",".join("?" * len(ids))
+            # Delete edges referencing entities that belong to purged observations
+            cursor.execute(f"DELETE FROM edges WHERE source_id IN (SELECT id FROM entities WHERE observation_id IN ({placeholders})) OR target_id IN (SELECT id FROM entities WHERE observation_id IN ({placeholders}))", tuple(ids))
+            # Delete entities belonging to purged observations
+            cursor.execute(f"DELETE FROM entities WHERE observation_id IN ({placeholders})", tuple(ids))
             cursor.execute(
                 f"DELETE FROM engram_archive WHERE id IN ({placeholders})",
-                observation_ids
+                ids
             )
             deleted = cursor.rowcount
             conn.commit()
-            logger.info(f"[Archive] Auto-purged {deleted} observations")
+            app_logger.info(f"[Archive] Auto-purged {deleted} observations")
             return deleted
         except Exception as e:
             app_logger.exception("[Archive] Error en purge")
@@ -363,6 +381,11 @@ class ArchiveManager:
         try:
             conn = self._get_conn()
             cursor = conn.cursor()
+            # Validate that observation_id exists in engram_archive
+            cursor.execute("SELECT id FROM engram_archive WHERE id = ?", (observation_id,))
+            if not cursor.fetchone():
+                app_logger.warning(f"[Archive] observation_id {observation_id} not found in engram_archive, skipping entity insert")
+                return None
             cursor.execute(
                 "INSERT INTO entities (observation_id, entity_type, value, timestamp) VALUES (?, ?, ?, ?)",
                 (observation_id, entity_type, value, datetime.now().isoformat())
@@ -385,7 +408,7 @@ class ArchiveManager:
             cursor.execute("SELECT id FROM entities WHERE id IN (?, ?)", (source_id, target_id))
             rows = cursor.fetchall()
             if len(rows) != 2:
-                logger.warning(f"[Archive] Entities no encontradas: {source_id}, {target_id}")
+                app_logger.warning(f"[Archive] Entities no encontradas: {source_id}, {target_id}")
                 return None
             
             cursor.execute(
@@ -427,10 +450,6 @@ class ArchiveManager:
             raise MemoryError(f"Failed to get entity edges: {e}") from e
 
     # --- Knowledge Graph Phase 3: Relations API ---
-    
-    VALID_RELATION_TYPES = frozenset({
-        "references", "relates_to", "follows", "supersedes", "contradicts"
-    })
     
     def mem_relate(self, source_id, target_id, relation_type):
         """
@@ -553,7 +572,7 @@ class ArchiveManager:
                 FROM edges e
                 JOIN traversal t ON (e.source_id = t.entity_id OR e.target_id = t.entity_id)
                 WHERE t.current_depth < ? 
-                  AND t.path NOT LIKE '%' || CASE WHEN e.source_id = t.entity_id THEN e.target_id ELSE e.source_id END || '%'
+                  AND ',' || t.path || ',' NOT LIKE '%,' || CASE WHEN e.source_id = t.entity_id THEN e.target_id ELSE e.source_id END || ',%'
             )
             SELECT entity_id, MIN(current_depth) as depth FROM traversal GROUP BY entity_id;
             """
@@ -696,7 +715,7 @@ class ArchiveManager:
             days_since_access = delta.total_seconds() / 86400.0  # Convert to days
             
             # Avoid division by zero and cap recency bonus
-            if days_since_access < 0.001:  # Less than ~15 minutes
+            if days_since_access < 0.001:  # Less than ~1.44 minutes
                 days_since_access = 0.001
             
             # recencyBonus = +0.1 * (1 / days_since_access)

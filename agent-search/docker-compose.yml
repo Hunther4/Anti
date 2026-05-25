@@ -1,0 +1,38 @@
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: agent-search-searxng
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    networks:
+      - agent-search
+    restart: unless-stopped
+    environment:
+      - SEARXNG_BASE_URL=http://searxng:8080/
+
+  api:
+    build: .
+    container_name: agent-search-api
+    ports:
+      - "127.0.0.1:3939:3939"
+    environment:
+      - SEARXNG_URL=http://searxng:8080
+      - CACHE_TTL=3600
+      - RATE_LIMIT=60
+      - ADAPTERS_DIR=/app/adapters
+      - AGENT_SEARCH_TOKEN=${AGENT_SEARCH_TOKEN:-}
+    depends_on:
+      - searxng
+    volumes:
+      - agent-search-data:/app/data
+      - ./adapters:/app/adapters:ro
+    networks:
+      - agent-search
+    restart: unless-stopped
+
+networks:
+  agent-search:
+    driver: bridge
+
+volumes:
+  agent-search-data:
