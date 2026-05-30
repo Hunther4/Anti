@@ -432,7 +432,7 @@ func banner() string {
 	sb.WriteString(" ██   ██ ████   ██    ██    ██\n")
 	sb.WriteString(" ███████ ██ ██  ██    ██    ██\n")
 	sb.WriteString(" ██   ██ ██  ██ ██    ██    ██\n")
-	sb.WriteString(" ██   ██ ██   ████    ██    ██  v1.0 Cosmic\n")
+	sb.WriteString(" ██   ██ ██   ████    ██    ██  v3.0 Cosmic Overhaul\n")
 	return sb.String()
 }
 
