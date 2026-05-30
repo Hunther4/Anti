@@ -76,6 +76,12 @@ class Brain:
         self.threshold = 0
         self._update_threshold()
 
+    def close(self):
+        """Closes the HTTP session to release resources."""
+        if self._session:
+            self._session.close()
+            self._session = None
+
     def _get_session(self):
         if self._session is None:
             self._session = requests.Session()
@@ -96,11 +102,8 @@ class Brain:
             "stream": False
         }
         
-        payload_size = len(json.dumps(payload))
-        
         for attempt in range(self.max_retries):
             try:
-                import time
                 start_time = time.time()
                 session = self._get_session()
                 response = session.post(url, json=payload, timeout=self.timeout)
@@ -181,12 +184,9 @@ class Brain:
         except requests.RequestException as e:
             app_logger.warning(f"[Brain] Connection check failed: {e}")
             return False
-
-    def _update_thresholds(self):
-        """Recalcula los límites tras un cambio de contexto."""
-        self._update_threshold()
-
+    
     # ==================== v0.4: Token Counting ====================
+
 
     def _get_tiktoken_encoding(self):
         """
@@ -359,44 +359,72 @@ class Brain:
             
         return messages
 
-    def _extract_tool_call(self, text):
+    def _extract_tool_call(self, match):
         """
-        Extract the first valid <tool_call> from text using balanced brace
-        matching to handle nested JSON arguments.
+        Extracts tool name and arguments from a regex match using balanced brace
+        matching to handle nested JSON arguments, ignoring braces inside strings.
         Returns (tool_name, tool_args_dict) or (None, None).
         """
-        pattern = r'<tool_call name="([^"]+)">(.*?)</tool_call>'
-        match = re.search(pattern, text, re.DOTALL)
-        if not match:
+        tool_name = match.group(1)
+        raw_json = match.group(2).strip()
+        if not raw_json:
             return None, None
 
-        raw_json = match.group(2).strip()
-
-        # Walk character by character to find the matching closing brace
-        # that balances the opening brace, handling nested JSON.
         brace_depth = 0
-        for i, ch in enumerate(raw_json):
-            if ch == '{':
-                brace_depth += 1
-            elif ch == '}':
-                brace_depth -= 1
-                if brace_depth == 0:
-                    json_str = raw_json[:i + 1]
-                    try:
-                        return match.group(1), json.loads(json_str)
-                    except json.JSONDecodeError:
-                        return None, None
+        in_string = False
+        escaped = False
+        found_start = False
 
+        for i, ch in enumerate(raw_json):
+            if escaped:
+                escaped = False
+                continue
+            
+            if ch == '\\':
+                escaped = True
+                continue
+                
+            if ch == '"':
+                in_string = not in_string
+                continue
+            
+            if not in_string:
+                if ch == '{':
+                    brace_depth += 1
+                    found_start = True
+                elif ch == '}':
+                    brace_depth -= 1
+                    if found_start and brace_depth == 0:
+                        json_str = raw_json[:i + 1]
+                        try:
+                            return tool_name, json.loads(json_str)
+                        except json.JSONDecodeError as e:
+                            app_logger.warning(f"Tool call JSON decode failed for {tool_name}: {e}")
+                            return None, None
+                    elif brace_depth < 0:
+                        # Guard against negative brace_depth: ignore leading '}'
+                        brace_depth = 0
+        
         return None, None
 
     def process_response(self, response_text):
         """
         Processes the LLM response to detect tool calls and route them.
-        Returns a tuple (is_tool_call, tool_name, tool_args, final_text).
+        Returns a tuple (is_tool_call, calls, final_text), where calls is a list of (tool_name, tool_args).
         """
-        tool_name, tool_args = self._extract_tool_call(response_text)
-        if tool_name is not None and tool_args is not None:
-            return True, tool_name, tool_args, response_text
+        pattern = r'<tool_call name="([^"]+)"\s*>(.*?)</tool_call>'
+        valid_calls = []
+        
+        for match in re.finditer(pattern, response_text, re.DOTALL):
+            tool_name, tool_args = self._extract_tool_call(match)
+            if tool_name and tool_args:
+                if tool_name in MCP_TOOLS:
+                    valid_calls.append((tool_name, tool_args))
+                else:
+                    app_logger.warning(f"Tool {tool_name} called but not registered in MCP_TOOLS")
 
-        return False, None, None, response_text
+        if valid_calls:
+            return True, valid_calls, response_text
+
+        return False, [], response_text
 

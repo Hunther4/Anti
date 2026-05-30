@@ -169,9 +169,21 @@ class ContextManager:
         self.messages = []
         self.token_count = 0
     
-    def get_messages(self) -> List[Dict]:
-        """Retorna mensajes actuales (sin modificar)."""
-        return self.messages.copy()
+    def update_context_length(self, new_length: int):
+        """Actualiza la longitud del contexto y recalcula los límites.
+        Evita la pérdida de métricas y el historial de mensajes.
+        """
+        self.model_context_length = new_length
+        self.usable = max(
+            new_length - self.reserved_system - self.reserved_completion,
+            0
+        )
+        self.threshold = int(self.usable * 0.85)
+        self.threshold = max(self.threshold, int(self.usable * 0.5))
+        
+        # Re-evaluate current overflow if applicable
+        if self.token_count > self.threshold:
+            self._compact()
     
     def set_messages(self, messages: List[Dict]):
         """Reemplaza mensajes (ej: para cargar desde sesión)."""

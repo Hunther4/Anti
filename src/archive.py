@@ -3,6 +3,7 @@ import json
 import os
 import math
 import re
+import threading
 from datetime import datetime
 
 from src.logger import AppLogger
@@ -40,7 +41,7 @@ class ArchiveManager:
     def __init__(self, db_path):
         self.db_path = db_path
         self._conn = None
-        self._init_db()
+        self._lock = threading.Lock()
 
     def _get_conn(self):
         """Returns a persistent connection with optimized PRAGMAs."""
@@ -50,6 +51,7 @@ class ArchiveManager:
             self._conn.execute("PRAGMA foreign_keys = ON")
             self._conn.execute("PRAGMA synchronous = NORMAL")
             self._conn.execute("PRAGMA busy_timeout = 5000")
+            self._init_db()
         return self._conn
 
     def __enter__(self):
@@ -63,12 +65,18 @@ class ArchiveManager:
         """Cierra la conexión SQLite de forma segura. Idempotente."""
         if self._conn is not None:
             try:
-                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                try:
+                    self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                except Exception as e:
+                    app_logger.debug(f"[Archive] Checkpoint failed during close: {e}")
                 self._conn.close()
             except Exception as e:
                 app_logger.debug(f"[Archive] Error closing connection: {e}")
             finally:
                 self._conn = None
+
+    def __del__(self):
+        self.close()
 
     def _init_db(self):
         """Inicializa las tablas si no existen."""
@@ -151,105 +159,115 @@ class ArchiveManager:
                 INSERT INTO engram_fts(rowid, topic, content) VALUES (new.id, new.topic, new.content);
             END;
         ''')
+        # Rebuild FTS index to ensure consistency
+        cursor.execute("INSERT INTO engram_fts(engram_fts) VALUES('rebuild')")
         conn.commit()
 
     def archive_engram(self, topic, content, importance=0.5, tags=""):
         """Mueve un engram al archivo frío."""
-        # NOTE: parameter 'importance' maps to column 'importance_score'
-        try:
-            conn = self._get_conn()
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO engram_archive (topic, content, timestamp, importance_score, tags) VALUES (?, ?, ?, ?, ?)",
-                (topic, content, datetime.now().isoformat(), importance, tags)
-            )
-            conn.commit()
-            return True
-        except Exception as e:
-            app_logger.exception(f"[Archive] Error archivando engram '{topic}'")
-            raise MemoryError(f"Failed to archive engram '{topic}': {e}") from e
+        with self._lock:
+            try:
+                conn = self._get_conn()
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT INTO engram_archive (topic, content, timestamp, importance_score, tags) VALUES (?, ?, ?, ?, ?)",
+                    (topic, content, datetime.now().isoformat(), importance, tags)
+                )
+                conn.commit()
+                return True
+            except Exception as e:
+                if self._conn:
+                    self._conn.rollback()
+                app_logger.exception(f"[Archive] Error archivando engram '{topic}'")
+                raise MemoryError(f"Failed to archive engram '{topic}': {e}") from e
 
     def search_archive(self, query, limit=5):
         """
         Busca engrams en el archivo usando FTS5 para máxima velocidad semántica/palabras clave.
         Phase 2.3: Actualiza last_accessed_at, aplica accessBonus y recalcula score.
         """
-        try:
-            conn = self._get_conn()
-            cursor = conn.cursor()
-            
-            # Preprocesar query para FTS5
-            clean_query = re.sub(r'[^\w\s]', '', query).strip()
-            if not clean_query:
-                return []
-            # FTS5 query: búsqueda OR de palabras clave para máxima recuperación
-            fts_query = " OR ".join(f'"{word}"' for word in clean_query.split())
-            
-            cursor.execute(
-                """
-                SELECT e.id, e.topic, e.content, e.timestamp, e.score, e.importance_score
-                FROM engram_archive e
-                JOIN engram_fts fts ON e.id = fts.rowid
-                WHERE engram_fts MATCH ?
-                ORDER BY bm25(engram_fts) LIMIT ?
-                """,
-                (fts_query, limit)
-            )
-            results = cursor.fetchall()
-            
-            if not results:
-                return []
-
-            processed_results = []
-            updates = []
-            now = datetime.now().isoformat()
-
-            for r in results:
-                engram_id = r[0]
-                # 3.1: Update last_accessed_at
-                # 3.2: Get current score and apply accessBonus
-                current_score = r[4] if r[4] is not None else 1.0
-                new_score = current_score + ACCESS_BONUS
-                # 3.3: Recalculate full score
-                new_importance = r[5] if r[5] is not None else 0.0
-                full_score = new_importance + new_score
+        with self._lock:
+            try:
+                conn = self._get_conn()
+                cursor = conn.cursor()
                 
-                updates.append((now, new_score, engram_id))
+                # Preprocesar query para FTS5
+                clean_query = re.sub(r'[^\w\s]', '', query).strip()
+                if not clean_query:
+                    return []
+                # FTS5 query: búsqueda OR de palabras clave para máxima recuperación
+                fts_query = " OR ".join(f'"{word}"' for word in clean_query.split())
                 
-                processed_results.append({
-                    "id": engram_id,
-                    "topic": r[1],
-                    "content": r[2],
-                    "timestamp": r[3],
-                    "score": full_score
-                })
-            
-            # Batch update using executemany
-            cursor.executemany(
-                "UPDATE engram_archive SET last_accessed_at = ?, score = ? WHERE id = ?",
-                updates
-            )
-            conn.commit()
-            return processed_results
-        except Exception as e:
-            app_logger.exception(f"[Archive] Error buscando en archivo: '{query}'")
-            raise MemoryError(f"Failed to search archive: {e}") from e
+                cursor.execute(
+                    """
+                    SELECT e.id, e.topic, e.content, e.timestamp, e.score, e.importance_score
+                    FROM engram_archive e
+                    JOIN engram_fts fts ON e.id = fts.rowid
+                    WHERE engram_fts MATCH ?
+                    ORDER BY bm25(engram_fts) LIMIT ?
+                    """,
+                    (fts_query, limit)
+                )
+                results = cursor.fetchall()
+                
+                if not results:
+                    return []
+
+                processed_results = []
+                updates = []
+                now = datetime.now().isoformat()
+
+                for r in results:
+                    engram_id = r[0]
+                    # 3.1: Update last_accessed_at
+                    # 3.2: Get current score and apply accessBonus
+                    current_score = r[4] if r[4] is not None else 1.0
+                    new_score = current_score + ACCESS_BONUS
+                    # 3.3: Recalculate full score
+                    new_importance = r[5] if r[5] is not None else 0.0
+                    full_score = new_importance + new_score
+                    
+                    updates.append((now, full_score, engram_id))
+                    
+                    processed_results.append({
+                        "id": engram_id,
+                        "topic": r[1],
+                        "content": r[2],
+                        "timestamp": r[3],
+                        "score": full_score
+                    })
+                
+                # Batch update using executemany
+                cursor.executemany(
+                    "UPDATE engram_archive SET last_accessed_at = ?, score = ? WHERE id = ?",
+                    updates
+                )
+                conn.commit()
+                return processed_results
+            except Exception as e:
+                if self._conn:
+                    self._conn.rollback()
+                app_logger.exception(f"[Archive] Error buscando en archivo: '{query}'")
+                raise MemoryError(f"Failed to search archive: {e}") from e
 
     def log_to_history(self, entry):
         """Guarda un log detallado en el historial de largo plazo."""
-        try:
-            conn = self._get_conn()
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO log_history (timestamp, task, result, success, score) VALUES (?, ?, ?, ?, ?)",
-                (entry.get('timestamp'), entry.get('task'), entry.get('result'), 
-                 1 if entry.get('success') else 0, entry.get('score', 0))
-            )
-            conn.commit()
-            return True
-        except Exception as e:
-            app_logger.exception(f"[Archive] Error guardando log histórico")
-            raise MemoryError(f"Failed to save history log: {e}") from e
+        with self._lock:
+            try:
+                conn = self._get_conn()
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT INTO log_history (timestamp, task, result, success, score) VALUES (?, ?, ?, ?, ?)",
+                    (entry.get('timestamp'), entry.get('task'), entry.get('result'), 
+                     1 if entry.get('success') else 0, entry.get('score', 0))
+                )
+                conn.commit()
+                return True
+            except Exception as e:
+                if self._conn:
+                    self._conn.rollback()
+                app_logger.exception(f"[Archive] Error guardando log histórico")
+                raise MemoryError(f"Failed to save history log: {e}") from e
 
     def get_stats(self):
         """Retorna estadísticas del archivo."""
@@ -321,30 +339,33 @@ class ArchiveManager:
         Returns:
             bool: True si se actualizó correctamente
         """
-        try:
-            conn = self._get_conn()
-            cursor = conn.cursor()
-            # Primero verificar que existe
-            cursor.execute("SELECT id FROM engram_archive WHERE id = ?", (observation_id,))
-            if not cursor.fetchone():
-                app_logger.warning(f"[Archive] Observación no encontrada: {observation_id}")
-                return False
-                
-            # Actualizar score + actualizar last_accessed_at
-            cursor.execute(
-                """
-                UPDATE engram_archive 
-                SET importance_score = MAX(0, importance_score + ?),
-                    last_accessed_at = ?
-                WHERE id = ?
-                """,
-                (score_delta, datetime.now().isoformat(), observation_id)
-            )
-            conn.commit()
-            return True
-        except Exception as e:
-            app_logger.exception(f"[Archive] Error actualizando score para observación {observation_id}")
-            raise MemoryError(f"Failed to update observation score: {e}") from e
+        with self._lock:
+            try:
+                conn = self._get_conn()
+                cursor = conn.cursor()
+                # Primero verificar que existe
+                cursor.execute("SELECT id FROM engram_archive WHERE id = ?", (observation_id,))
+                if not cursor.fetchone():
+                    app_logger.warning(f"[Archive] Observación no encontrada: {observation_id}")
+                    return False
+                    
+                # Actualizar score + actualizar last_accessed_at
+                cursor.execute(
+                    """
+                    UPDATE engram_archive 
+                    SET importance_score = MAX(0, importance_score + ?),
+                        last_accessed_at = ?
+                    WHERE id = ?
+                    """,
+                    (score_delta, datetime.now().isoformat(), observation_id)
+                )
+                conn.commit()
+                return True
+            except Exception as e:
+                if self._conn:
+                    self._conn.rollback()
+                app_logger.exception(f"[Archive] Error actualizando score para observación {observation_id}")
+                raise MemoryError(f"Failed to update observation score: {e}") from e
 
     def purge_observations(self, observation_ids: list) -> int:
         """
@@ -354,31 +375,47 @@ class ArchiveManager:
             observation_ids: Lista de IDs a eliminar
             
         Returns:
-            int: Número de observaciones eliminadas
+            int: Número total de registros eliminados (observations + entities + edges)
         """
         if not observation_ids:
             return 0
             
-        try:
-            conn = self._get_conn()
-            cursor = conn.cursor()
-            ids = observation_ids
-            placeholders = ",".join("?" * len(ids))
-            # Delete edges referencing entities that belong to purged observations
-            cursor.execute(f"DELETE FROM edges WHERE source_id IN (SELECT id FROM entities WHERE observation_id IN ({placeholders})) OR target_id IN (SELECT id FROM entities WHERE observation_id IN ({placeholders}))", tuple(ids) * 2)
-            # Delete entities belonging to purged observations
-            cursor.execute(f"DELETE FROM entities WHERE observation_id IN ({placeholders})", tuple(ids))
-            cursor.execute(
-                f"DELETE FROM engram_archive WHERE id IN ({placeholders})",
-                ids
-            )
-            deleted = cursor.rowcount
-            conn.commit()
-            app_logger.info(f"[Archive] Auto-purged {deleted} observations")
-            return deleted
-        except Exception as e:
-            app_logger.exception("[Archive] Error en purge")
-            raise MemoryError(f"Failed to purge observations: {e}") from e
+        with self._lock:
+            try:
+                conn = self._get_conn()
+                cursor = conn.cursor()
+                total_deleted = 0
+                
+                # Batch purge in chunks to avoid SQLITE_MAX_VARIABLE_NUMBER
+                for i in range(0, len(observation_ids), 500):
+                    chunk = observation_ids[i:i+500]
+                    placeholders = ",".join("?" * len(chunk))
+                    
+                    # 1. Delete edges referencing entities that belong to purged observations
+                    cursor.execute(f"DELETE FROM edges WHERE source_id IN (SELECT id FROM entities WHERE observation_id IN ({placeholders})) OR target_id IN (SELECT id FROM entities WHERE observation_id IN ({placeholders}))", tuple(chunk) * 2)
+                    edges_deleted = cursor.rowcount
+                    
+                    # 2. Delete entities belonging to purged observations
+                    cursor.execute(f"DELETE FROM entities WHERE observation_id IN ({placeholders})", tuple(chunk))
+                    entities_deleted = cursor.rowcount
+                    
+                    # 3. Delete archive records
+                    cursor.execute(
+                        f"DELETE FROM engram_archive WHERE id IN ({placeholders})",
+                        chunk
+                    )
+                    obs_deleted = cursor.rowcount
+                    
+                    total_deleted += (obs_deleted + entities_deleted + edges_deleted)
+                
+                conn.commit()
+                app_logger.info(f"[Archive] Auto-purged {len(observation_ids)} observations and their associated entities/edges")
+                return total_deleted
+            except Exception as e:
+                if self._conn:
+                    self._conn.rollback()
+                app_logger.exception("[Archive] Error en purge")
+                raise MemoryError(f"Failed to purge observations: {e}") from e
 
     def add_entity(self, observation_id, entity_type: str, value: str):
         """
@@ -386,48 +423,65 @@ class ArchiveManager:
         Acepta observation_id como string (hash) o int.
         Retorna el ID de la entidad o None si falla.
         """
-        try:
-            conn = self._get_conn()
-            cursor = conn.cursor()
-            # Validate that observation_id exists in engram_archive
-            cursor.execute("SELECT id FROM engram_archive WHERE id = ?", (observation_id,))
-            if not cursor.fetchone():
-                app_logger.warning(f"[Archive] observation_id {observation_id} not found in engram_archive, skipping entity insert")
-                return None
-            cursor.execute(
-                "INSERT INTO entities (observation_id, entity_type, value, timestamp) VALUES (?, ?, ?, ?)",
-                (observation_id, entity_type, value, datetime.now().isoformat())
-            )
-            conn.commit()
-            return cursor.lastrowid
-        except Exception as e:
-            app_logger.exception(f"[Archive] Error agregando entidad (type={entity_type})")
-            raise MemoryError(f"Failed to add entity: {e}") from e
+        with self._lock:
+            try:
+                conn = self._get_conn()
+                cursor = conn.cursor()
+                
+                # Validate that observation_id exists in engram_archive ONLY if it's numeric
+                # If it's a string (hash), we assume it's a valid external reference
+                if isinstance(observation_id, int) or (isinstance(observation_id, str) and observation_id.isdigit()):
+                    cursor.execute("SELECT id FROM engram_archive WHERE id = ?", (observation_id,))
+                    if not cursor.fetchone():
+                        app_logger.warning(f"[Archive] observation_id {observation_id} not found in engram_archive, skipping entity insert")
+                        return None
+                
+                cursor.execute(
+                    "INSERT INTO entities (observation_id, entity_type, value, timestamp) VALUES (?, ?, ?, ?)",
+                    (observation_id, entity_type, value, datetime.now().isoformat())
+                )
+                conn.commit()
+                return cursor.lastrowid
+            except Exception as e:
+                if self._conn:
+                    self._conn.rollback()
+                app_logger.exception(f"[Archive] Error agregando entidad (type={entity_type})")
+                raise MemoryError(f"Failed to add entity: {e}") from e
 
     def add_edge(self, source_id: int, target_id: int, relation_type: str) -> int:
         """
         Agrega una relación (edge) entre dos entidades.
         Retorna el ID del edge o None si falla.
         """
-        try:
-            conn = self._get_conn()
-            cursor = conn.cursor()
-            # Validar que ambas entidades existan
-            cursor.execute("SELECT id FROM entities WHERE id IN (?, ?)", (source_id, target_id))
-            rows = cursor.fetchall()
-            if len(rows) != 2:
-                app_logger.warning(f"[Archive] Entities no encontradas: {source_id}, {target_id}")
-                return None
-            
-            cursor.execute(
-                "INSERT INTO edges (source_id, target_id, relation_type, timestamp) VALUES (?, ?, ?, ?)",
-                (source_id, target_id, relation_type, datetime.now().isoformat())
-            )
-            conn.commit()
-            return cursor.lastrowid
-        except Exception as e:
-            app_logger.exception(f"[Archive] Error agregando edge")
-            raise MemoryError(f"Failed to add edge: {e}") from e
+        with self._lock:
+            try:
+                conn = self._get_conn()
+                cursor = conn.cursor()
+                # Validar que ambas entidades existan
+                cursor.execute("SELECT id FROM entities WHERE id IN (?, ?)", (source_id, target_id))
+                rows = cursor.fetchall()
+                
+                # For self-loops, rows will have only 1 entry. 
+                # We allow self-loops as long as the entity exists.
+                if source_id == target_id:
+                    if len(rows) != 1:
+                        app_logger.warning(f"[Archive] Entity not found: {source_id}")
+                        return None
+                elif len(rows) != 2:
+                    app_logger.warning(f"[Archive] Entities no encontradas: {source_id}, {target_id}")
+                    return None
+                
+                cursor.execute(
+                    "INSERT INTO edges (source_id, target_id, relation_type, timestamp) VALUES (?, ?, ?, ?)",
+                    (source_id, target_id, relation_type, datetime.now().isoformat())
+                )
+                conn.commit()
+                return cursor.lastrowid
+            except Exception as e:
+                if self._conn:
+                    self._conn.rollback()
+                app_logger.exception(f"[Archive] Error agregando edge")
+                raise MemoryError(f"Failed to add edge: {e}") from e
 
     def get_entities_by_type(self, entity_type: str, limit: int = 50) -> list:
         """取得指定类型的实体列表。"""
@@ -475,27 +529,30 @@ class ArchiveManager:
             return (False, f"Tipo de relación inválido: {relation_type}. "
                            f"Válidos: {', '.join(self.VALID_RELATION_TYPES)}")
         
-        try:
-            conn = self._get_conn()
-            cursor = conn.cursor()
-            # Verificar que ambas entidades existen
-            cursor.execute("SELECT id FROM entities WHERE id = ?", (source_id,))
-            if not cursor.fetchone():
-                return (False, f"Entidad fuente no encontrada: {source_id}")
-            cursor.execute("SELECT id FROM entities WHERE id = ?", (target_id,))
-            if not cursor.fetchone():
-                return (False, f"Entidad objetivo no encontrada: {target_id}")
-            
-            # Insertar la relación
-            cursor.execute(
-                "INSERT INTO edges (source_id, target_id, relation_type, timestamp) VALUES (?, ?, ?, ?)",
-                (source_id, target_id, relation_type, datetime.now().isoformat())
-            )
-            conn.commit()
-            return (True, f"Relación creada: {source_id} --[{relation_type}]--> {target_id}")
-        except Exception as e:
-            app_logger.exception(f"[Archive] Error en mem_relate")
-            raise MemoryError(f"Failed to create relation: {e}") from e
+        with self._lock:
+            try:
+                conn = self._get_conn()
+                cursor = conn.cursor()
+                # Verificar que ambas entidades existen
+                cursor.execute("SELECT id FROM entities WHERE id = ?", (source_id,))
+                if not cursor.fetchone():
+                    return (False, f"Entidad fuente no encontrada: {source_id}")
+                cursor.execute("SELECT id FROM entities WHERE id = ?", (target_id,))
+                if not cursor.fetchone():
+                    return (False, f"Entidad objetivo no encontrada: {target_id}")
+                
+                # Insertar la relación
+                cursor.execute(
+                    "INSERT INTO edges (source_id, target_id, relation_type, timestamp) VALUES (?, ?, ?, ?)",
+                    (source_id, target_id, relation_type, datetime.now().isoformat())
+                )
+                conn.commit()
+                return (True, f"Relación creada: {source_id} --[{relation_type}]--> {target_id}")
+            except Exception as e:
+                if self._conn:
+                    self._conn.rollback()
+                app_logger.exception(f"[Archive] Error en mem_relate")
+                raise MemoryError(f"Failed to create relation: {e}") from e
 
 
     def mem_get_relations(self, observation_id, relation_type=None):
@@ -533,14 +590,23 @@ class ArchiveManager:
                 params.append(relation_type)
             
             cursor.execute(query, params)
-            return [{
-                "source_id": r[0],
-                "target_id": r[1],
-                "relation_type": r[2],
-                "target_value": r[3],
-                "source_value": r[4],
-                "direction": r[5]
-            } for r in cursor.fetchall()]
+            
+            seen = set()
+            results = []
+            for r in cursor.fetchall():
+                # Deduplicate result edges by (source_id, target_id, relation_type)
+                edge_key = (r[0], r[1], r[2])
+                if edge_key not in seen:
+                    seen.add(edge_key)
+                    results.append({
+                        "source_id": r[0],
+                        "target_id": r[1],
+                        "relation_type": r[2],
+                        "target_value": r[3],
+                        "source_value": r[4],
+                        "direction": r[5]
+                    })
+            return results
         except Exception as e:
             app_logger.exception(f"[Archive] Error en mem_get_relations para {observation_id}")
             raise MemoryError(f"Failed to get relations: {e}") from e
@@ -567,7 +633,7 @@ class ArchiveManager:
             # We use a path to avoid cycles, but we'll try to make it as light as possible
             query = """
             WITH RECURSIVE traversal(entity_id, current_depth, path) AS (
-                SELECT id, 0, CAST(id AS TEXT)
+                SELECT id, 0, '|' || CAST(id AS TEXT) || '|'
                 FROM entities
                 WHERE observation_id = ?
                 
@@ -576,11 +642,11 @@ class ArchiveManager:
                 SELECT 
                     CASE WHEN e.source_id = t.entity_id THEN e.target_id ELSE e.source_id END,
                     t.current_depth + 1,
-                    t.path || ',' || CASE WHEN e.source_id = t.entity_id THEN e.target_id ELSE e.source_id END
+                    t.path || CASE WHEN e.source_id = t.entity_id THEN e.target_id ELSE e.source_id END || '|'
                 FROM edges e
                 JOIN traversal t ON (e.source_id = t.entity_id OR e.target_id = t.entity_id)
                 WHERE t.current_depth < ? 
-                  AND ',' || t.path || ',' NOT LIKE '%,' || CASE WHEN e.source_id = t.entity_id THEN e.target_id ELSE e.source_id END || ',%'
+                  AND t.path NOT LIKE '%|' || CASE WHEN e.source_id = t.entity_id THEN e.target_id ELSE e.source_id END || '|%'
             )
             SELECT entity_id, MIN(current_depth) as depth FROM traversal GROUP BY entity_id;
             """
@@ -615,7 +681,7 @@ class ArchiveManager:
             
             # Fetch all edges between these nodes
             cursor.execute(
-                f"SELECT source_id, target_id, relation_type FROM edges WHERE source_id IN ({placeholders}) OR target_id IN ({placeholders})",
+                f"SELECT source_id, target_id, relation_type FROM edges WHERE source_id IN ({placeholders}) AND target_id IN ({placeholders})",
                 entity_ids + entity_ids
             )
             edges = [{

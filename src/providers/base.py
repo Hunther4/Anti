@@ -91,20 +91,6 @@ class BaseProvider(ABC):
     # --- Utilidades comunes ---
     
     def _format_messages(self, messages: List[Dict]) -> List[Dict]:
-        """Formatea mensajes para el proveedor específico."""
-        return messages
-    
-    def _parse_usage(self, response_data: Dict, duration: float) -> Dict[str, Any]:
-        """ parse usage desde la respuesta del proveedor."""
-        usage = response_data.get("usage", {})
-        return {
-            "prompt_tokens": usage.get("prompt_tokens", 0),
-            "completion_tokens": usage.get("completion_tokens", 0),
-            "total_tokens": usage.get("total_tokens", 0),
-            "duration": duration,
-            "tps": usage.get("completion_tokens", 0) / duration if duration > 0 else 0
-        }
-
 
 class ProviderFactory:
     """Factory para crear proveedores automáticamente."""
@@ -129,13 +115,20 @@ class ProviderFactory:
         import requests
         
         if base_url:
-            url = base_url
+            try:
+                r = requests.get(base_url, timeout=2)
+                if r.status_code < 500:
+                    return base_url
+            except Exception:
+                pass
         else:
             for port in [1234, 11434, 8000, 8001]:
                 try:
-                    r = requests.get(f"http://127.0.0.1:{port}/v1/models", timeout=2)
+                    endpoint = "/api/tags" if port == 11434 else "/v1/models"
+                    url = f"http://127.0.0.1:{port}"
+                    r = requests.get(f"{url}{endpoint}", timeout=2)
                     if r.status_code == 200:
-                        return f"http://127.0.0.1:{port}/v1"
+                        return url if port == 11434 else f"{url}/v1"
                 except Exception:
                     continue
         
@@ -193,4 +186,4 @@ class ProviderFactory:
             elif ":1234" in detected or "/v1" in detected:
                 return cls.create("lmstudio", base_url=detected, **kwargs)
         
-        return cls.create("lmstudio", base_url=base_url or "http://127.0.0.1:1234/v1", **kwargs)
+        return cls.create("lmstudio", base_url=base_url if base_url is not None else "http://127.0.0.1:1234/v1", **kwargs)

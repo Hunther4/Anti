@@ -4,7 +4,7 @@ Refactored to use requests instead of openai library.
 """
 
 import asyncio
-import collections
+import json
 import logging
 import re
 import requests
@@ -12,8 +12,8 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-_BOXED_RE = re.compile(r"\\boxed\{([-+]?\d)\}")
-_SCORE_RE = re.compile(r"Score:\s*([-+]?\d)", re.IGNORECASE)
+_BOXED_RE = re.compile(r"\\boxed\{([-+]?\d+)\}")
+_SCORE_RE = re.compile(r"Score:\s*([-+]?\d+)", re.IGNORECASE)
 
 _GREEN = "\033[32m"
 _CYAN = "\033[36m"
@@ -23,7 +23,7 @@ _RESET = "\033[0m"
 def _sanitize_text(text: str) -> str:
     """Replace XML-like tags that may trigger content filters."""
     text = re.sub(r"<tool_call>.*?</tool_call>", "[tool_call block]", text, flags=re.DOTALL)
-    text = re.sub(r"<[^>]+>", '', text)
+    text = re.sub(r"<[^>]*>", '', text)
     return text
 
 
@@ -41,7 +41,13 @@ def _build_prm_judge_prompt(response_text: str, instruction_text: str) -> list[d
         "Score: 1"
     )
     clean_instruction = _sanitize_text(instruction_text)
-    clean_response = _sanitize_text(response_text[:1500])  # Cap response length to save tokens
+    
+    # Sanitize first, then truncate to avoid splitting tags
+    full_sanitized_response = _sanitize_text(response_text)
+    if len(full_sanitized_response) > 1500:
+        logger.warning("Response truncated for PRM scoring")
+        
+    clean_response = full_sanitized_response[:1500]
     user = (
         f"Instruction: {clean_instruction}\n\n"
         f"Response: {clean_response}\n\n"
@@ -63,8 +69,8 @@ def _parse_prm_score(text: str) -> Optional[int]:
         if val in (1, -1, 0):
             return val
     # No valid score found via regex — don't guess from random numbers
-    logger.warning("No valid score pattern found in response, using default 0.0")
-    return 0.0
+    logger.warning("No valid score pattern found in response, returning None")
+    return None
 
 
 def _majority_vote(votes: list[Optional[int]]) -> Optional[float]:
@@ -141,7 +147,7 @@ class PRMScorer:
                 "max_tokens": self.max_new_tokens,
             }
             # Use run_in_executor to make requests.post non-blocking for the event loop
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             response = await loop.run_in_executor(
                 None, 
                 lambda: requests.post(self.prm_url, json=payload, timeout=120)

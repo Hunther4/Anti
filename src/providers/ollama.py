@@ -23,12 +23,10 @@ class OllamaProvider(BaseProvider):
     
     def __init__(self, base_url: str = None, model: str = None, timeout: int = 180):
         super().__init__(
-            base_url=base_url or self.DEFAULT_URL, 
+            base_url=base_url if base_url is not None else self.DEFAULT_URL, 
             model=model or "llama3",
             timeout=timeout
         )
-        # Ollama usa el nombre del modelo tal cual
-        self._model = model or "llama3"
     
     async def chat(self, messages: List[Dict], temperature: float = 0.7) -> Tuple[str, Dict[str, Any]]:
         """Envia un chat a Ollama."""
@@ -43,7 +41,7 @@ class OllamaProvider(BaseProvider):
         ollama_messages = self._format_messages(messages)
         
         payload = {
-            "model": self._model,
+            "model": self.model,
             "messages": ollama_messages,
             "stream": False,
             "options": {
@@ -88,11 +86,10 @@ class OllamaProvider(BaseProvider):
                 
                 return content, usage
                 
-            except requests.exceptions.RequestException as e:
+            except (requests.exceptions.RequestException, ValueError, KeyError, IndexError) as e:
                 last_error = e
                 if attempt < self.max_retries - 1:
-                    import time as t
-                    t.sleep(2 * (2 ** attempt))
+                    time.sleep(2 * (2 ** attempt))
         
         raise ConnectionError(f"Ollama no disponible después de {self.max_retries} intentos: {last_error}")
     
@@ -123,12 +120,12 @@ class OllamaProvider(BaseProvider):
                 # Intentar detectar de tamaño del modelo
                 size = model.get("size", 0)
                 if size > 0:
-                    # Modelos > 4GB probablemente tienen 32k
-                    if size > 4 * 1024 * 1024 * 1024:
-                        context_length = 32768
                     # Modelos > 8GB probablemente tienen 128k
-                    elif size > 8 * 1024 * 1024 * 1024:
+                    if size > 8 * 1024 * 1024 * 1024:
                         context_length = 131072
+                    # Modelos > 4GB probablemente tienen 32k
+                    elif size > 4 * 1024 * 1024 * 1024:
+                        context_length = 32768
                 
                 models.append({
                     "id": model_id,
@@ -140,8 +137,8 @@ class OllamaProvider(BaseProvider):
             # Si no hay modelos, usar default
             if not models:
                 models.append({
-                    "id": self._model,
-                    "name": self._model,
+                    "id": self.model,
+                    "name": self.model,
                     "context_length": 8192,
                     "size": 0
                 })
@@ -150,7 +147,7 @@ class OllamaProvider(BaseProvider):
             
         except Exception as e:
             logger.warning(f"[Ollama] Error listando modelos: {e}")
-            return [{"id": self._model, "context_length": 8192}]
+            return [{"id": self.model, "context_length": 8192}]
     
     async def check_connection(self) -> bool:
         """Verifica conexión con Ollama."""
@@ -164,7 +161,7 @@ class OllamaProvider(BaseProvider):
                 timeout=5
             )
             return response.status_code == 200
-        except:
+        except Exception:
             return False
     
     def _format_messages(self, messages: List[Dict]) -> List[Dict]:
@@ -184,8 +181,7 @@ class OllamaProvider(BaseProvider):
         """Sincroniza modelo y contexto."""
         models = await self.list_models()
         if models:
-            self._model = models[0]["id"]
-            self.model = self._model
+            self.model = models[0]["id"]
             self.context_max = models[0]["context_length"]
             self.usable = self.context_max - 2000
             self.threshold = int(self.usable * 0.8)
@@ -200,9 +196,9 @@ class OllamaProvider(BaseProvider):
 
     async def _get_context_length(self, model_id: str = None) -> int:
         """Obtiene el context_length del modelo."""
-        model_id = model_id or self._model
+        model_id = model_id or self.model
         
-        # Intentar de las美国的 models
+        # Buscar en modelos listados
         models = await self.list_models()
         for m in models:
             if m.get("id") == model_id or m.get("name", "").startswith(model_id):
