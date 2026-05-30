@@ -31,9 +31,13 @@ class TestAntiV15Updates(unittest.TestCase):
             self.assertTrue("edges" in tables)
 
     def test_entity_and_edge_relational_integrity(self):
+        # 0. Agregar un engram en el archivo para validar la clave externa/existencia
+        self.archive.archive_engram("concept", "Anti-Agent and TF-IDF Ranker setup")
+        obs_id = 1 # El ID auto-incremental generado
+        
         # 1. Agregar entidades
-        self.archive.add_entity("obs_1", "concept", "Anti-Agent")
-        self.archive.add_entity("obs_1", "concept", "TF-IDF Ranker")
+        self.archive.add_entity(obs_id, "concept", "Anti-Agent")
+        self.archive.add_entity(obs_id, "concept", "TF-IDF Ranker")
         
         # Obtener entidades insertadas
         with sqlite3.connect(self.db_path) as conn:

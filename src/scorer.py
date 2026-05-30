@@ -22,10 +22,8 @@ _RESET = "\033[0m"
 
 def _sanitize_text(text: str) -> str:
     """Replace XML-like tags that may trigger content filters."""
-    import re as _re
-    text = _re.sub(r"<tool_call>.*?</tool_call>", "[tool_call block]", text, flags=_re.DOTALL)
-    text = _re.sub(r"<[a-zA-Z_][^>]{0,80}>", "[tag]", text)
-    text = _re.sub(r"</[a-zA-Z_][^>]{0,80}>", "[/tag]", text)
+    text = re.sub(r"<tool_call>.*?</tool_call>", "[tool_call block]", text, flags=re.DOTALL)
+    text = re.sub(r"<[^>]+>", '', text)
     return text
 
 
@@ -64,26 +62,27 @@ def _parse_prm_score(text: str) -> Optional[int]:
         val = int(matches[-1])
         if val in (1, -1, 0):
             return val
-    # Fallback si responde con el número directamente
-    for word in text.split():
-        if word in ("1", "+1"):
-            return 1
-        elif word in ("-1",):
-            return -1
-        elif word in ("0",):
-            return 0
-    return None
+    # No valid score found via regex — don't guess from random numbers
+    logger.warning("No valid score pattern found in response, using default 0.0")
+    return 0.0
 
 
-def _majority_vote(scores: list[Optional[int]]) -> float:
-    valid = [s for s in scores if s is not None]
+def _majority_vote(votes: list[Optional[int]]) -> Optional[float]:
+    valid = [v for v in votes if v is not None]
     if not valid:
+        return None
+    positive = sum(1 for v in valid if v > 0)
+    negative = sum(1 for v in valid if v < 0)
+    neutral = len(valid) - positive - negative
+
+    if positive > negative and positive > neutral:
+        return 1.0
+    elif negative > positive and negative > neutral:
+        return -1.0
+    elif neutral > positive and neutral > negative:
         return 0.0
-    counter = collections.Counter(valid)
-    top = counter.most_common(1)[0]
-    if list(counter.values()).count(top[1]) > 1:
-        return 0.0
-    return float(top[0])
+    else:
+        return None  # Tie — ambiguous
 
 
 class PRMScorer:
@@ -118,7 +117,7 @@ class PRMScorer:
         final = _majority_vote(scores)
 
         representative = ""
-        if final != 0.0:
+        if final is not None and final != 0.0:
             for s, text in results:
                 if s is not None and s == int(final):
                     representative = text
@@ -148,8 +147,11 @@ class PRMScorer:
                 lambda: requests.post(self.prm_url, json=payload, timeout=120)
             )
             response.raise_for_status()
-            content = response.json()['choices'][0]['message']['content'] or ""
+            choices = response.json().get('choices', [])
+            if not choices:
+                raise ValueError("No choices in response")
+            content = choices[0].get('message', {}).get('content', '')
             return _parse_prm_score(content), content
-        except Exception as e:
+        except (requests.RequestException, KeyError, IndexError, json.JSONDecodeError, ValueError) as e:
             logger.warning("[PRMScorer] query failed (vote %d): %s", vote_id, e)
             return None, ""

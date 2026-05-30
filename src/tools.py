@@ -138,6 +138,10 @@ def run_local_command(command: str, timeout: int = 45) -> str:
             "--cpus=1.0",
             "--network=none",
             "--cap-drop=ALL",
+            "--security-opt=no-new-privileges:true",
+            "--read-only",
+            "--tmpfs", "/tmp",
+            "--tmpfs", "/root"
         ] + user_flag + [
             "-v", f"{workspace_dir}:/workspace",
             "-w", "/workspace",

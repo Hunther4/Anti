@@ -1,11 +1,47 @@
 import os
+import sys
+import threading
+import secrets
 import json
 import webbrowser
-import threading
 import uuid
 import asyncio
 import logging
+import time
 from http.server import HTTPServer, SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+# --- SECURITY EARLY-BOOT ---
+SHARED_SECRET = b""
+
+def _umbilical_cord():
+    try:
+        while True:
+            chunk = sys.stdin.buffer.read(1024)
+            if not chunk:
+                break
+    except Exception:
+        pass
+    print("[SECURITY] Parent process died or stdin closed. Emergency shutdown.", flush=True)
+    os._exit(0)
+
+def _init_security():
+    global SHARED_SECRET
+    if os.environ.get("ANTI_MANAGED") == "1":
+        try:
+            SHARED_SECRET = sys.stdin.buffer.read(32)
+            if len(SHARED_SECRET) != 32:
+                print("[SECURITY] Failed to read 32-byte secret. Exiting.", flush=True)
+                os._exit(1)
+            t = threading.Thread(target=_umbilical_cord, daemon=True)
+            t.start()
+        except Exception as e:
+            print(f"[SECURITY] Boot error: {e}", flush=True)
+            os._exit(1)
+    else:
+        SHARED_SECRET = secrets.token_bytes(32)
+
+_init_security()
+# ---------------------------
 
 # Corrected imports for the current structure
 from src.agent import AntiAgent
@@ -76,10 +112,12 @@ def background_agent_task(job_id, message, image_data):
         with active_jobs_lock:
             active_jobs[job_id]["status"] = "completed"
             active_jobs[job_id]["result"] = response_obj
+            active_jobs[job_id]["_ts"] = time.time()
     except Exception as e:
         with active_jobs_lock:
             active_jobs[job_id]["status"] = "failed"
             active_jobs[job_id]["error"] = str(e)
+            active_jobs[job_id]["_ts"] = time.time()
 
 
 class APIHandler(SimpleHTTPRequestHandler):
@@ -115,6 +153,14 @@ class APIHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             with active_jobs_lock:
                 job = active_jobs.get(job_id, {"status": "not_found"})
+                # Cleanup completed jobs older than 1 hour to prevent memory leak
+                stale_ids = [
+                    jid for jid, jdata in active_jobs.items()
+                    if jdata.get("status") in ("completed", "failed")
+                    and time.time() - jdata.get("_ts", time.time()) > 3600
+                ]
+                for stale_id in stale_ids:
+                    del active_jobs[stale_id]
             try:
                 self.wfile.write(json.dumps(job).encode('utf-8'))
             except Exception:
@@ -254,12 +300,26 @@ class APIHandler(SimpleHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
-            # Devolver lista de herramientas MCP registradas en el cerebro
             mcp_tools = list(getattr(agent.brain, 'MCP_TOOLS', {}).keys())
             try:
                 self.wfile.write(json.dumps({"servers": [{"name": "Local Tools", "status": "online", "tools": mcp_tools}]}).encode('utf-8'))
             except Exception:
                 logging.exception("Failed to send MCP tools")
+            return
+
+        elif path_base == '/api/metrics':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            try:
+                from src import metrics as metrics_mod
+                metrics_mod.update_resource_usage()
+                self.wfile.write(json.dumps(metrics_mod.get_metrics()).encode('utf-8'))
+            except Exception as e:
+                try:
+                    self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+                except Exception:
+                    logging.exception("Failed to send metrics")
             return
 
         elif path_base.startswith('/api/file/'):
@@ -280,12 +340,51 @@ class APIHandler(SimpleHTTPRequestHandler):
 
         return super().do_GET()
 
+    used_nonces = {}
+    nonce_lock = threading.Lock()
+
+    def _verify_signature(self, post_data: bytes) -> bool:
+        if os.environ.get("ANTI_MANAGED") != "1":
+            return True # Permitir acceso si no es gestionado por Go
+            
+        nonce = self.headers.get('X-Anti-Nonce')
+        signature = self.headers.get('X-Anti-Signature')
+        
+        if not nonce or not signature:
+            return False
+            
+        with self.nonce_lock:
+            now = time.time()
+            stale = [n for n, ts in self.used_nonces.items() if now - ts > 300]
+            for n in stale:
+                del self.used_nonces[n]
+                
+            if nonce in self.used_nonces:
+                return False # Ataque de reproducción bloqueado
+                
+        import hmac
+        import hashlib
+        payload_to_sign = nonce.encode('utf-8') + b"." + post_data
+        expected_mac = hmac.new(SHARED_SECRET, payload_to_sign, hashlib.sha256).hexdigest()
+        
+        if hmac.compare_digest(expected_mac, signature):
+            with self.nonce_lock:
+                self.used_nonces[nonce] = time.time()
+            return True
+            
+        return False
+
     def do_POST(self):
+        content_length = int(self.headers.get('Content-Length', 0))
+        post_data = self.rfile.read(content_length)
+
+        if not self._verify_signature(post_data):
+            self.send_error(403, "Forbidden: Invalid Signature or Replay Attack detected")
+            return
+
         path_base = self.path.split('?')[0]
 
         if path_base == '/api/chat':
-            content_length = int(self.headers.get('Content-Length', 0))
-            post_data = self.rfile.read(content_length)
 
             try:
                 data = json.loads(post_data.decode('utf-8'))

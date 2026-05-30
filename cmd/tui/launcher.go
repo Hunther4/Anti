@@ -1,6 +1,7 @@
 package main
 
 import (
+	crypto_rand "crypto/rand"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -385,7 +387,29 @@ func (m model) handleMainMenuSelection() (tea.Model, tea.Cmd) {
 			return processFinishedMsg{}
 		})
 	case 1: // Web Host
-		return m, tea.ExecProcess(exec.Command(m.pythonPath, "server.py"), func(err error) tea.Msg {
+		cmd := exec.Command(m.pythonPath, "server.py")
+		cmd.Env = append(os.Environ(), "ANTI_MANAGED=1")
+		
+		r, w, err := os.Pipe()
+		if err == nil {
+			cmd.Stdin = r
+			cmd.SysProcAttr = &syscall.SysProcAttr{
+				Pdeathsig: syscall.SIGKILL,
+			}
+			go func() {
+				secret := make([]byte, 32)
+				crypto_rand.Read(secret)
+				// Guardar el secreto en memoria de Go por si luego queremos hacer llamadas HTTP firmadas
+				// os.Setenv("ANTI_SECRET", hex.EncodeToString(secret)) // Opcional
+				w.Write(secret)
+				// Mantenemos 'w' abierto como cordón umbilical
+			}()
+		}
+
+		return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+			if w != nil {
+				w.Close()
+			}
 			return processFinishedMsg{}
 		})
 	case 2: // API Keys Management

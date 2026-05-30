@@ -44,3 +44,8 @@ venv/
 env/
 ENV/
 venv_agentsearch/
+
+# Binarios
+anti
+anti.exe
+
