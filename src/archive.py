@@ -52,15 +52,23 @@ class ArchiveManager:
             self._conn.execute("PRAGMA busy_timeout = 5000")
         return self._conn
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False  # Don't suppress exceptions
+
     def close(self):
-        """Close the SQLite connection, checkpointing WAL first."""
-        if self._conn:
+        """Cierra la conexión SQLite de forma segura. Idempotente."""
+        if self._conn is not None:
             try:
                 self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 self._conn.close()
-            except Exception:
-                pass
-            self._conn = None
+            except Exception as e:
+                app_logger.debug(f"[Archive] Error closing connection: {e}")
+            finally:
+                self._conn = None
 
     def _init_db(self):
         """Inicializa las tablas si no existen."""
@@ -357,7 +365,7 @@ class ArchiveManager:
             ids = observation_ids
             placeholders = ",".join("?" * len(ids))
             # Delete edges referencing entities that belong to purged observations
-            cursor.execute(f"DELETE FROM edges WHERE source_id IN (SELECT id FROM entities WHERE observation_id IN ({placeholders})) OR target_id IN (SELECT id FROM entities WHERE observation_id IN ({placeholders}))", tuple(ids))
+            cursor.execute(f"DELETE FROM edges WHERE source_id IN (SELECT id FROM entities WHERE observation_id IN ({placeholders})) OR target_id IN (SELECT id FROM entities WHERE observation_id IN ({placeholders}))", tuple(ids) * 2)
             # Delete entities belonging to purged observations
             cursor.execute(f"DELETE FROM entities WHERE observation_id IN ({placeholders})", tuple(ids))
             cursor.execute(

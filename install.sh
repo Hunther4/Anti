@@ -23,10 +23,12 @@ pip install rich
 # 3. Compilar Ejecutable Go
 echo -e "\n${BLUE}🏗️ Compilando lanzador estático en Go...${NC}"
 if command -v go &> /dev/null; then
-    go build -o anti launcher.go
+    cd cmd/tui
+    go build -o ../../anti .
+    cd ../..
     echo -e "${GREEN}✅ Lanzador Go compiled successfully.${NC}"
 else
-    echo -e "${RED}⚠️ Go no está instalado. Se utilizará el lanzador de respaldo en Python.${NC}"
+    echo -e "${RED}⚠️ Go no está instalado. Se ejecutará el agente directamente desde main.py.${NC}"
 fi
 
 # 4. Configurar Alias
@@ -34,7 +36,7 @@ echo -e "\n${BLUE}🔗 Configurando alias 'anti' en .bashrc...${NC}"
 if [ -f "./anti" ]; then
     ALIAS_LINE="alias anti='$(pwd)/anti'"
 else
-    ALIAS_LINE="alias anti='$(pwd)/venv/bin/python $(pwd)/launcher.py'"
+    ALIAS_LINE="alias anti='$(pwd)/venv/bin/python $(pwd)/main.py'"
 fi
 
 if grep -q "alias anti=" ~/.bashrc; then

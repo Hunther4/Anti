@@ -8,6 +8,7 @@ Cada proveedor debe implementar esta interfaz:
 - check_connection() -> bool
 """
 
+import threading
 from abc import ABC, abstractmethod
 from typing import List, Dict, Tuple, Any, Optional
 
@@ -79,6 +80,14 @@ class BaseProvider(ABC):
             self._session.mount('https://', adapter)
         return self._session
     
+    def close(self):
+        """Cierra la sesión HTTP si existe."""
+        if hasattr(self, '_session') and self._session:
+            self._session.close()
+    
+    def __del__(self):
+        self.close()
+    
     # --- Utilidades comunes ---
     
     def _format_messages(self, messages: List[Dict]) -> List[Dict]:
@@ -100,6 +109,7 @@ class BaseProvider(ABC):
 class ProviderFactory:
     """Factory para crear proveedores automáticamente."""
     
+    _lock = threading.Lock()
     PROVIDERS = {
         "lmstudio": None,  # Se importa lazy
         "ollama": None,
@@ -126,7 +136,7 @@ class ProviderFactory:
                     r = requests.get(f"http://127.0.0.1:{port}/v1/models", timeout=2)
                     if r.status_code == 200:
                         return f"http://127.0.0.1:{port}/v1"
-                except:
+                except Exception:
                     continue
         
         return None
@@ -134,34 +144,35 @@ class ProviderFactory:
     @classmethod
     def create(cls, provider: str, **kwargs):
         """Crea un proveedor específico."""
-        if cls.PROVIDERS.get(provider) is None:
-            # Load lazy
-            if provider == "lmstudio":
-                from .lmstudio import LMStudioProvider
-                cls.PROVIDERS[provider] = LMStudioProvider
-            elif provider == "ollama":
-                from .ollama import OllamaProvider
-                cls.PROVIDERS[provider] = OllamaProvider
-            elif provider == "openai":
-                from .openai import OpenAIProvider
-                cls.PROVIDERS[provider] = OpenAIProvider
-            elif provider == "gemini":
-                from .gemini import GeminiProvider
-                cls.PROVIDERS[provider] = GeminiProvider
-            elif provider == "deepseek":
-                from .deepseek import DeepSeekProvider
-                cls.PROVIDERS[provider] = DeepSeekProvider
-            elif provider == "openaicompatible":
-                from .openaicompatible import OpenAICompatibleProvider
-                cls.PROVIDERS[provider] = OpenAICompatibleProvider
-            elif provider == "anthropic":
-                from .anthropic import AnthropicProvider
-                cls.PROVIDERS[provider] = AnthropicProvider
-            elif provider == "minimax":
-                from .minimax import MinimaxProvider
-                cls.PROVIDERS[provider] = MinimaxProvider
-            else:
-                raise ValueError(f"Proveedor desconocido: {provider}")
+        with cls._lock:
+            if cls.PROVIDERS.get(provider) is None:
+                # Load lazy
+                if provider == "lmstudio":
+                    from .lmstudio import LMStudioProvider
+                    cls.PROVIDERS[provider] = LMStudioProvider
+                elif provider == "ollama":
+                    from .ollama import OllamaProvider
+                    cls.PROVIDERS[provider] = OllamaProvider
+                elif provider == "openai":
+                    from .openai import OpenAIProvider
+                    cls.PROVIDERS[provider] = OpenAIProvider
+                elif provider == "gemini":
+                    from .gemini import GeminiProvider
+                    cls.PROVIDERS[provider] = GeminiProvider
+                elif provider == "deepseek":
+                    from .deepseek import DeepSeekProvider
+                    cls.PROVIDERS[provider] = DeepSeekProvider
+                elif provider == "openaicompatible":
+                    from .openaicompatible import OpenAICompatibleProvider
+                    cls.PROVIDERS[provider] = OpenAICompatibleProvider
+                elif provider == "anthropic":
+                    from .anthropic import AnthropicProvider
+                    cls.PROVIDERS[provider] = AnthropicProvider
+                elif provider == "minimax":
+                    from .minimax import MinimaxProvider
+                    cls.PROVIDERS[provider] = MinimaxProvider
+                else:
+                    raise ValueError(f"Proveedor desconocido: {provider}")
         
         provider_class = cls.PROVIDERS.get(provider)
         if provider_class:
@@ -177,9 +188,9 @@ class ProviderFactory:
         detected = cls.detect(base_url)
         
         if detected:
-            if ":1234" in detected or "/v1" in detected:
-                return cls.create("lmstudio", base_url=detected, **kwargs)
-            elif ":11434" in detected:
+            if ":11434" in detected:
                 return cls.create("ollama", base_url=detected, **kwargs)
+            elif ":1234" in detected or "/v1" in detected:
+                return cls.create("lmstudio", base_url=detected, **kwargs)
         
         return cls.create("lmstudio", base_url=base_url or "http://127.0.0.1:1234/v1", **kwargs)

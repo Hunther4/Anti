@@ -4,6 +4,8 @@ import re
 import asyncio
 import logging
 import subprocess
+import shutil
+import time
 
 from src.logger import AppLogger, Colors
 
@@ -17,6 +19,7 @@ from src.scorer import PRMScorer
 from src.evolver import SkillEvolver
 from src.consolidator import MemoryConsolidator
 from src.tools import duckduckgo_search, fetch_url_text, autonomous_research, write_file, read_file, run_local_command
+from src import metrics
 from prompts.system import build_system_prompt
 from prompts.templates import REASONER_PROMPT, REFLECT_PROMPT, COMPACT_PROMPT, IMPORTANCE_PROMPT
 
@@ -188,9 +191,16 @@ class AntiAgent:
     # --- CLI Loop ---
 
     def run(self):
-        name = self.config.get("agent_name", "Anti").upper()
-        
-        # 1. Glowing Cosmic ASCII Banner
+        """Punto de entrada del CLI. Coordina banner, conexión y loop de input."""
+        provider_name = type(self.brain).__name__.lower()
+        is_local = "lmstudio" in provider_name or "ollama" in provider_name
+        self._display_banner(is_local)
+        self._check_startup_connection()
+        self._input_loop(is_local)
+
+    def _display_banner(self, is_local: bool):
+        """Renderiza el banner ASCII y las tarjetas de diagnóstico de inicio."""
+        # 1. ASCII Banner
         print(f"\n{Colors.CYAN}{Colors.BOLD}  █████  ███    ██ ████████ ██")
         print(" ██   ██ ████   ██    ██    ██")
         print(" ███████ ██ ██  ██    ██    ██")
@@ -198,62 +208,53 @@ class AntiAgent:
         print(f" ██   ██ ██   ████    ██    ██  v1.5 Cosmic {Colors.END}{Colors.WHITE}(DevOps & Security Auditor){Colors.END}")
         print(f"{Colors.CYAN}⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼{Colors.END}\n")
 
-        # 2. Connection and setup diagnostics cards
-        provider_name = type(self.brain).__name__.lower()
-        is_local = "lmstudio" in provider_name or "ollama" in provider_name
-        
+        # 2. Tarjetas de diagnóstico
         provider_label = self.config.get("provider", "auto").upper()
         model_label = self.config.get("model") or "Auto-detectado"
-        
-        # Memory Check
+
         db_path = os.path.join(self.base_dir, "memory/cold_archive.db")
-        db_size_kb = 0
-        if os.path.exists(db_path):
-            db_size_kb = int(os.path.getsize(db_path) / 1024)
-            
-        # Active Plugins count
-        plugins_count = 0
-        if hasattr(self, 'plugin_manager') and self.plugin_manager:
-            plugins_count = len(self.plugin_manager.tools)
-        else:
-            plugins_count = 5 # default fallback core tools
-            
+        db_size_kb = int(os.path.getsize(db_path) / 1024) if os.path.exists(db_path) else 0
+
+        plugins_count = (
+            len(self.plugin_manager.tools)
+            if hasattr(self, "plugin_manager") and self.plugin_manager
+            else 5
+        )
         prm_status = "ACTIVADO 🟢" if self.config.get("enable_prm_scorer", True) else "DESACTIVADO 🔴"
-        
-        # Display elegant configuration cards
+
         print(f"  {Colors.BOLD}🤖 [PROVEEDOR]:{Colors.END} {Colors.CYAN}{provider_label}{Colors.END} | {Colors.WHITE}{model_label}{Colors.END}")
         print(f"  {Colors.BOLD}🧠 [MEMORIA]:{Colors.END}    SQLite ({db_size_kb} KB)")
         print(f"  {Colors.BOLD}🔌 [PLUGINS]:{Colors.END}    {plugins_count} Herramientas Activas")
         print(f"  {Colors.BOLD}⚡ [PRM SCORER]:{Colors.END} {prm_status}")
-        
-        # Dynamic sliding context message
+
         if is_local:
             print(f"  {Colors.BOLD}🔒 [CONTEXTO]:{Colors.END}   Local ({Colors.GREEN}Ventana 10 msg - Ultra Velocidad ⚡{Colors.END})")
         else:
             print(f"  {Colors.BOLD}☁️ [CONTEXTO]:{Colors.END}   Nube ({Colors.BLUE}Ventana 100 msg - Memoria Profunda ☁️{Colors.END})")
         print(f"\n{Colors.CYAN}⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼{Colors.END}\n")
 
-        # Connection check
+    def _check_startup_connection(self):
+        """Verifica la conexión con el proveedor al arrancar y avisa si falla."""
         if not asyncio.run(self.brain.check_connection()):
-            url = self.config.get("lm_studio_url", self.DEFAULT_LM_URL)
             print(f"{Colors.YELLOW}[!] Advertencia: No se pudo conectar con el proveedor seleccionado.{Colors.END}")
             print(f"{Colors.YELLOW}    Asegurate de que el servidor local o tu API key esten configurados.{Colors.END}\n")
 
+    def _input_loop(self, is_local: bool):
+        """Loop principal de input del CLI. Lee comandos y despacha al agente."""
+        if is_local:
+            prompt = f"{Colors.CYAN}{Colors.BOLD}[Local ⚡]{Colors.END} {Colors.GREEN}{Colors.BOLD}Anti@Local > {Colors.END}"
+        else:
+            prompt = f"{Colors.BLUE}{Colors.BOLD}[Cloud ☁️]{Colors.END} {Colors.GREEN}{Colors.BOLD}Anti@Cloud > {Colors.END}"
+
         while self.is_running:
             try:
-                # Dynamic shell prompt based on provider type
-                if is_local:
-                    prompt = f"{Colors.CYAN}{Colors.BOLD}[Local ⚡]{Colors.END} {Colors.GREEN}{Colors.BOLD}Anti@Local > {Colors.END}"
-                else:
-                    prompt = f"{Colors.BLUE}{Colors.BOLD}[Cloud ☁️]{Colors.END} {Colors.GREEN}{Colors.BOLD}Anti@Cloud > {Colors.END}"
-                    
                 user_input = input(prompt).strip()
                 if not user_input:
                     continue
 
                 if user_input.lower() in ["exit", "quit"]:
                     self.is_running = False
-                    print(f"\n{Colors.BLUE}[*] Apagando sistemas... ¡Hasta pronto, Analista Supremo! 🚀{Colors.END}\n")
+                    print(f"\n{Colors.BLUE}[*] Apagando sistemas... ¡Hasta pronto! 🚀{Colors.END}\n")
                     break
 
                 result = asyncio.run(self.handle_command(user_input))
@@ -283,6 +284,9 @@ class AntiAgent:
             return self._show_help()
         elif cmd_lower == "status":
             return await self._show_status()
+        elif cmd_lower == "metrics":
+            # Return current metrics snapshot
+            return metrics.get_metrics()
         elif cmd_lower == "reasoner":
             return self._toggle_reasoner()
         elif cmd_lower == "reflect":
@@ -401,8 +405,22 @@ class AntiAgent:
         messages.append({"role": "user", "content": user_content})
 
         # Main Chat Inference
+        prompt_tokens = 0
+        start_timestamp = time.time()
+        # Pre-seed historial con el modelo activo para identificación correcta
+        metrics.record_inference(
+            model=self.brain.model,
+            ttft_ms=0,
+            tokens_generated=0,
+            duration_seconds=0,
+        )
         try:
             response, usage = await self.brain.chat(messages)
+            # Record inference metrics (actualiza la entrada pre-seeded)
+            metrics.record_ttft(start_timestamp)
+            completion_tokens = usage.get('completion_tokens', 0)
+            duration = usage.get('duration', 0) or usage.get('time', 0)
+            metrics.record_token_generation(completion_tokens, duration)
             self.brain.record_usage(usage)
             prompt_tokens = usage.get("prompt_tokens", 0)
             self.context_mgr.token_count = prompt_tokens
@@ -455,6 +473,13 @@ class AntiAgent:
                     # Execute dynamically
                     try:
                         result = await self.plugin_manager.execute_tool(tool_name, raw_args)
+                        # Attempt to parse JSON result to gauge parse success
+                        try:
+                            json.loads(result)
+                            metrics.record_parse_success(True)
+                        except Exception as e:
+                            app_logger.debug(f"Result parsing failed: {e}")
+                            metrics.record_parse_success(False)
                     except Exception as e:
                         app_logger.exception(f"Tool execution failed: {tool_name}")
                         result = f"[ERROR] La herramienta {tool_name} falló: {e}"
@@ -745,7 +770,6 @@ class AntiAgent:
                 return f"[ADMIN] No encontré '{src_name}' en ninguna carpeta."
 
             dst_path = os.path.join(dest_map[dst_label], src_name)
-            import shutil
             shutil.move(src_path, dst_path)
             print(f"{Colors.GREEN}[+] Movido: {src_path} -> {dst_path}{Colors.END}")
             return f"[ADMIN] '{src_name}' movido a {dst_label}/."
@@ -890,7 +914,8 @@ class AntiAgent:
         
         # Create MCP directory with template SKILL.md
         mcp_dir = os.path.join(skills_dir, safe_id)
-        
+        os.makedirs(mcp_dir, exist_ok=True)
+
         skill_path = os.path.join(mcp_dir, "SKILL.md")
         template = f"""---
 name: {safe_id}
@@ -922,7 +947,6 @@ Contenido del MCP instalado. Editar este archivo para personalizar el comportami
         if not os.path.exists(mcp_dir):
             return f"MCP '{mcp_id}' no encontrado."
         
-        import shutil
         shutil.rmtree(mcp_dir)
         
         # Reload skills if available

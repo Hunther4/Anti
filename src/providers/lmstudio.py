@@ -91,7 +91,7 @@ class LMStudioProvider(BaseProvider):
                     import time as t
                     t.sleep(2 * (2 ** attempt))
         
-        return f"Error conectando con LM Studio: {last_error}", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "duration": 0, "tps": 0}
+        raise ConnectionError(f"LM Studio failed after {self.max_retries} retries: {last_error}")
     
     async def list_models(self) -> List[Dict[str, Any]]:
         """Lista modelos disponibles en LM Studio."""

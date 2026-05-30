@@ -45,7 +45,6 @@ class OllamaProvider(BaseProvider):
         payload = {
             "model": self._model,
             "messages": ollama_messages,
-            "temperature": temperature,
             "stream": False,
             "options": {
                 "temperature": temperature,

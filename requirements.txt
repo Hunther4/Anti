@@ -4,7 +4,5 @@ html2text==2024.2.26
 pypdf==4.0.1
 playwright==1.41.2
 python-dotenv==1.0.0
-argparse
-logging
-asyncio
-sqlite3
+psutil>=5.9.0
+tiktoken>=0.7.0

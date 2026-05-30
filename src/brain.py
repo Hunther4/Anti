@@ -3,6 +3,7 @@ import asyncio
 import re
 import logging
 import json
+import time
 
 from src.logger import AppLogger
 from src.exceptions import BrainConnectionError, BrainContextError, AntiError as BrainError
@@ -65,10 +66,14 @@ class Brain:
         self.max_retries = 3
         self.timeout = 120
         
-        # Context-aware config (v0.5)
+        # Context-aware config (v0.5) — initialize defaults before _update_threshold
         self.context_max = 32000
         self.usable_threshold = 0.85
         self.last_prompt_tokens = 0
+        self.reserved_system = 1500
+        self.reserved_completion = 3000
+        self.usable = 0
+        self.threshold = 0
         self._update_threshold()
 
     def _get_session(self):
@@ -130,7 +135,6 @@ class Brain:
                 return content, usage
             except Exception as e:
                 if attempt < self.max_retries - 1:
-                    import time
                     time.sleep(2 * (2 ** attempt))
                 else:
                     raise BrainConnectionError(f"Failed to connect to LLM server after {self.max_retries} attempts: {e}")
@@ -183,11 +187,40 @@ class Brain:
         self._update_threshold()
 
     # ==================== v0.4: Token Counting ====================
-    
+
+    def _get_tiktoken_encoding(self):
+        """
+        Obtiene el encoding correcto para el modelo activo.
+        tiktoken mapea automáticamente por prefijo de modelo (gpt-4, gpt-3.5, etc.).
+        Para modelos locales (LM Studio, Ollama), usa cl100k_base como aproximación.
+        Retorna None si tiktoken no está instalado.
+        """
+        try:
+            import tiktoken
+            # Try to get exact encoding for the model name
+            try:
+                return tiktoken.encoding_for_model(self.model)
+            except KeyError:
+                # Unknown model (local/custom) — cl100k_base is the best universal approximation
+                return tiktoken.get_encoding("cl100k_base")
+        except ImportError:
+            return None
+
     def count_tokens(self, text: str) -> int:
-        """Cuenta tokens de forma precisa usando regex."""
+        """
+        Cuenta tokens con precisión real usando tiktoken (si está disponible).
+        Fallback automático al método regex si tiktoken no está instalado.
+        """
         if not text:
             return 0
+        enc = self._get_tiktoken_encoding()
+        if enc is not None:
+            return len(enc.encode(text))
+        # Fallback: regex approximation
+        return self._count_tokens_regex(text)
+
+    def _count_tokens_regex(self, text: str) -> int:
+        """Estimación regex — solo se usa cuando tiktoken no está disponible."""
         words = re.findall(r"\b[\w']+\b", text)
         punct = re.findall(r"[^\w\s]", text)
         return len(words) + len(punct)
@@ -326,23 +359,44 @@ class Brain:
             
         return messages
 
+    def _extract_tool_call(self, text):
+        """
+        Extract the first valid <tool_call> from text using balanced brace
+        matching to handle nested JSON arguments.
+        Returns (tool_name, tool_args_dict) or (None, None).
+        """
+        pattern = r'<tool_call name="([^"]+)">(.*?)</tool_call>'
+        match = re.search(pattern, text, re.DOTALL)
+        if not match:
+            return None, None
+
+        raw_json = match.group(2).strip()
+
+        # Walk character by character to find the matching closing brace
+        # that balances the opening brace, handling nested JSON.
+        brace_depth = 0
+        for i, ch in enumerate(raw_json):
+            if ch == '{':
+                brace_depth += 1
+            elif ch == '}':
+                brace_depth -= 1
+                if brace_depth == 0:
+                    json_str = raw_json[:i + 1]
+                    try:
+                        return match.group(1), json.loads(json_str)
+                    except json.JSONDecodeError:
+                        return None, None
+
+        return None, None
+
     def process_response(self, response_text):
         """
         Processes the LLM response to detect tool calls and route them.
         Returns a tuple (is_tool_call, tool_name, tool_args, final_text).
         """
-        # Regex to detect <tool_call name="tool_name">{"arg": "val"}</tool_call>
-        tool_pattern = r'<tool_call name="([^"]+)">(\{.*?\})</tool_call>'
-        match = re.search(tool_pattern, response_text, re.DOTALL)
-        
-        if match:
-            tool_name = match.group(1)
-            try:
-                tool_args = json.loads(match.group(2))
-                return True, tool_name, tool_args, response_text
-            except json.JSONDecodeError as e:
-                app_logger.error(f"[Brain] Failed to parse tool arguments: {e}")
-                return False, None, None, response_text
-        
+        tool_name, tool_args = self._extract_tool_call(response_text)
+        if tool_name is not None and tool_args is not None:
+            return True, tool_name, tool_args, response_text
+
         return False, None, None, response_text
 

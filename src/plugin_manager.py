@@ -55,8 +55,12 @@ class PluginManager:
             if filename.endswith(".py") and not filename.startswith("__"):
                 module_name = f"{base_module}.{filename[:-3]}"
                 try:
-                    importlib.import_module(module_name)
-                    logger.debug(f"[PluginManager] Módulo {module_name} cargado exitosamente.")
+                    if module_name in sys.modules:
+                        # Already loaded — skip to avoid duplicate registry entries
+                        logger.debug(f"[PluginManager] Módulo {module_name} ya cargado, omitiendo.")
+                    else:
+                        importlib.import_module(module_name)
+                        logger.debug(f"[PluginManager] Módulo {module_name} cargado exitosamente.")
                 except Exception as e:
                     logger.error(f"[PluginManager] Error cargando plugin {filename}: {e}")
 
