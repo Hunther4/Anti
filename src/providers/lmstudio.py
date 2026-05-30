@@ -23,7 +23,7 @@ class LMStudioProvider(BaseProvider):
     
     def __init__(self, base_url: str = None, model: str = None, timeout: int = 120):
         super().__init__(
-            base_url=base_url or f"{self.DEFAULT_URL}/v1", 
+            base_url=base_url if base_url is not None else f"{self.DEFAULT_URL}/v1", 
             model=model or "local-model",
             timeout=timeout
         )
@@ -85,11 +85,10 @@ class LMStudioProvider(BaseProvider):
                 
                 return content, usage
                 
-            except requests.exceptions.RequestException as e:
+            except (requests.exceptions.RequestException, ValueError, KeyError, IndexError) as e:
                 last_error = e
                 if attempt < self.max_retries - 1:
-                    import time as t
-                    t.sleep(2 * (2 ** attempt))
+                    time.sleep(2 * (2 ** attempt))
         
         raise ConnectionError(f"LM Studio failed after {self.max_retries} retries: {last_error}")
     
@@ -152,7 +151,7 @@ class LMStudioProvider(BaseProvider):
                 timeout=5
             )
             return response.status_code == 200
-        except:
+        except Exception:
             return False
     
     def count_tokens(self, text: str) -> int:

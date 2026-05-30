@@ -111,6 +111,15 @@ class AntiAgent:
             "personality": "Sos un agente autonomo avanzado."
         }
 
+    async def close(self):
+        """Gracefully closes all resources."""
+        if hasattr(self, 'brain') and self.brain:
+            self.brain.close()
+        if hasattr(self, 'scorer') and self.scorer:
+            # Scorer currently has no close() method, but added for consistency
+            pass
+        app_logger.info("AntiAgent resources closed successfully.")
+
     def render_markdown(self, text: str) -> str:
         """
         Renders basic markdown elements into gorgeous ANSI escape sequences.
@@ -213,7 +222,11 @@ class AntiAgent:
         model_label = self.config.get("model") or "Auto-detectado"
 
         db_path = os.path.join(self.base_dir, "memory/cold_archive.db")
-        db_size_kb = int(os.path.getsize(db_path) / 1024) if os.path.exists(db_path) else 0
+        try:
+            db_size_kb = int(os.path.getsize(db_path) / 1024) if os.path.exists(db_path) else 0
+        except (OSError, FileNotFoundError, IsADirectoryError) as e:
+            app_logger.debug(f"Error getting db size: {e}")
+            db_size_kb = 0
 
         plugins_count = (
             len(self.plugin_manager.tools)
@@ -235,9 +248,12 @@ class AntiAgent:
 
     def _check_startup_connection(self):
         """Verifica la conexión con el proveedor al arrancar y avisa si falla."""
-        if not asyncio.run(self.brain.check_connection()):
-            print(f"{Colors.YELLOW}[!] Advertencia: No se pudo conectar con el proveedor seleccionado.{Colors.END}")
-            print(f"{Colors.YELLOW}    Asegurate de que el servidor local o tu API key esten configurados.{Colors.END}\n")
+        try:
+            if not asyncio.run(self.brain.check_connection()):
+                print(f"{Colors.YELLOW}[!] Advertencia: No se pudo conectar con el proveedor seleccionado.{Colors.END}")
+                print(f"{Colors.YELLOW}    Asegurate de que el servidor local o tu API key esten configurados.{Colors.END}\n")
+        except Exception as e:
+            print(f"{Colors.RED}[!] Error crítico verificando conexión: {e}{Colors.END}")
 
     def _input_loop(self, is_local: bool):
         """Loop principal de input del CLI. Lee comandos y despacha al agente."""
@@ -325,14 +341,103 @@ class AntiAgent:
     # --- Core Processing ---
 
     async def _process(self, user_msg, image_data=None):
-        # print(f"{Colors.CYAN}[*] Pensando...{Colors.END}") # Silenced for less garbage
+        user_text = user_msg if isinstance(user_msg, str) else str(user_msg)
+        
+        # 1. Build System Prompt
+        system_prompt = self._build_system_prompt(user_text)
+        
+        # 2. Build conversation thread
+        messages = [{"role": "system", "content": system_prompt}]
+        for msg in self.history:
+            if isinstance(msg["content"], list):
+                text = next((item["text"] for item in msg["content"] if item["type"] == "text"), "Imagen previa")
+                messages.append({"role": msg["role"], "content": text})
+            else:
+                messages.append(msg)
+        
+        if image_data:
+            print(f"{Colors.YELLOW}[i] Imagen recibida para analisis.{Colors.END}")
+            user_content = [
+                {"type": "text", "text": user_msg if user_msg else "Analiza esta imagen."},
+                {"type": "image_url", "image_url": {"url": image_data}}
+            ]
+        else:
+            user_content = user_msg
+            
+        messages.append({"role": "user", "content": user_content})
+        
+        # 3. Initial Chat Inference
+        start_timestamp = time.time()
+        metrics.record_inference(model=self.brain.model, ttft_ms=0, tokens_generated=0, duration_seconds=0)
+        
+        try:
+            response, usage = await asyncio.wait_for(self.brain.chat(messages), timeout=120)
+            metrics.record_ttft(start_timestamp)
+            completion_tokens = usage.get('completion_tokens', 0)
+            duration = usage.get('duration') if usage.get('duration') is not None else usage.get('time', 0)
+            metrics.record_token_generation(completion_tokens, duration)
+            self.brain.record_usage(usage)
+            self.context_mgr.token_count = usage.get("prompt_tokens", 0)
+        except Exception as e:
+            app_logger.exception(f"Chat inference failed")
+            return {
+                "response": f"Error en inferencia: {e}",
+                "steps": [],
+                "sources": {},
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "duration": 0, "tps": 0},
+                "score": 0.0
+            }
 
+        if isinstance(response, (list, tuple)):
+            response_str = response[0] if len(response) > 0 else ""
+        else:
+            response_str = str(response)
+            
+        if "Error conectando con LM Studio" in response_str:
+            app_logger.error(f"LM Studio connection error: {response_str}")
+            print(f"{Colors.RED}[!] {response_str}{Colors.END}")
+            return {
+                "response": f"No pude procesar tu solicitud. Error de LM Studio: {response_str}",
+                "steps": [],
+                "sources": {},
+                "usage": usage if 'usage' in locals() else {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "duration": 0, "tps": 0},
+                "score": 0.0
+            }
+
+        response = response_str.replace("<thought>", "").replace("</thought>", "").strip()
+
+        # 4. ReAct Tool Loop
+        final_response, execution_steps, extracted_sources, final_usage = await self._run_tool_loop(messages, response, user_text)
+        
+        # 5. Evaluation & Refinement
+        tool_step = len(execution_steps)
+        final_response, score, is_success, votes = await self._evaluate_response(final_response, user_text, tool_step)
+        
+        # 6. Update History & Stats
+        self._update_history(user_msg, final_response, is_success, score, votes)
+        
+        # Auto-maintenance
+        self.task_counter += 1
+        if self.task_counter >= 10:
+            await self._reflect()
+            self.task_counter = 0
+        
+        await self._check_integrity(final_usage.get("prompt_tokens", 0) if final_usage else 0)
+        
+        return {
+            "response": final_response,
+            "steps": execution_steps,
+            "sources": extracted_sources,
+            "usage": final_usage if final_usage else usage,
+            "score": score
+        }
+
+    def _build_system_prompt(self, user_text):
+        """Builds the system prompt including omni-context and optional document overrides."""
         name = self.config.get("agent_name", "Anti")
         personality = self.config.get("personality", "Sos un agente autonomo avanzado.")
         
         # LECTURA MODE: detect @mentions to load a local document as exclusive context
-        user_text = user_msg if isinstance(user_msg, str) else str(user_msg)
-        
         reading_context = None
         locked_to_doc = False
         at_mentions = re.findall(r'@(\S+)', user_text)
@@ -378,141 +483,68 @@ class AntiAgent:
                 + reading_context
             )
             system_prompt = system_prompt + doc_override
+            
+        return system_prompt
 
-        # Build user content (multimodal support)
-        if image_data:
-            print(f"{Colors.YELLOW}[i] Imagen recibida para analisis.{Colors.END}")
-            user_content = [
-                {"type": "text", "text": user_msg if user_msg else "Analiza esta imagen."},
-                {"type": "image_url", "image_url": {"url": image_data}}
-            ]
-        else:
-            user_content = user_msg
-
-        # Build conversation thread
-        messages = [{"role": "system", "content": system_prompt}]
-
-        for msg in self.history:
-            if isinstance(msg["content"], list):
-                text = next(
-                    (item["text"] for item in msg["content"] if item["type"] == "text"),
-                    "Imagen previa"
-                )
-                messages.append({"role": msg["role"], "content": text})
-            else:
-                messages.append(msg)
-
-        messages.append({"role": "user", "content": user_content})
-
-        # Main Chat Inference
-        prompt_tokens = 0
-        start_timestamp = time.time()
-        # Pre-seed historial con el modelo activo para identificación correcta
-        metrics.record_inference(
-            model=self.brain.model,
-            ttft_ms=0,
-            tokens_generated=0,
-            duration_seconds=0,
-        )
-        try:
-            response, usage = await self.brain.chat(messages)
-            # Record inference metrics (actualiza la entrada pre-seeded)
-            metrics.record_ttft(start_timestamp)
-            completion_tokens = usage.get('completion_tokens', 0)
-            duration = usage.get('duration', 0) or usage.get('time', 0)
-            metrics.record_token_generation(completion_tokens, duration)
-            self.brain.record_usage(usage)
-            prompt_tokens = usage.get("prompt_tokens", 0)
-            self.context_mgr.token_count = prompt_tokens
-        except (ConnectionError, TimeoutError, ValueError) as e:
-            app_logger.exception(f"Chat inference failed")
-            return {
-                "response": f"Error en inferencia: {e}",
-                "steps": [],
-                "sources": {},
-                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "duration": 0, "tps": 0},
-                "score": 0.0
-            }
-
-        # Handle both tuple (fixed) and string (legacy) error responses
-        response_str = response if isinstance(response, str) else response[0] if isinstance(response, tuple) else str(response)
-        if "Error conectando con LM Studio" in response_str:
-            app_logger.error(f"LM Studio connection error: {response_str}")
-            print(f"{Colors.RED}[!] {response_str}{Colors.END}")
-            return {
-                "response": f"No pude procesar tu solicitud. Error de LM Studio: {response_str}",
-                "steps": [],
-                "sources": {},
-                "usage": usage if 'usage' in locals() else {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "duration": 0, "tps": 0},
-                "score": 0.0
-            }
-
-        # Clean model artifacts
-        response = response.replace("<thought>", "").replace("</thought>", "").strip()
-
-        # --- ReAct Tool Loop (up to 10 iterations for EXTREME mode) ---
+    async def _run_tool_loop(self, messages, initial_response, user_msg):
+        """Handles the ReAct tool loop, returning final response, steps, and sources."""
         MAX_TOOL_STEPS = 10
         tool_step = 0
         execution_steps = []
         extracted_sources = {}
-
+        response = initial_response
+        
         while tool_step < MAX_TOOL_STEPS:
             tool_triggered = False
             tool_context = None
             current_step = {"step": tool_step + 1, "tool": None, "query": None, "result_summary": None}
 
-            # Detect which tool the model wants to use (Dynamic Plugin Engine)
-            match = re.search(r"\[([A-Z_]+):\s*(.*?)\]", response, re.DOTALL)
-            if match:
-                tool_name = match.group(1).strip()
-                raw_args = match.group(2).strip()
+            # Detect which tool the model wants to use (via brain.process_response)
+            is_tool, tool_name, tool_args, clean_response = self.brain.process_response(response)
+            if is_tool and tool_name in self.plugin_manager.tools:
+                raw_args = json.dumps(tool_args) if isinstance(tool_args, dict) else str(tool_args)
+                print(f"{Colors.YELLOW}[*] [{tool_step+1}/{MAX_TOOL_STEPS}] {tool_name}: {raw_args[:50]}...{Colors.END}")
                 
-                if tool_name in self.plugin_manager.tools:
-                    print(f"{Colors.YELLOW}[*] [{tool_step+1}/{MAX_TOOL_STEPS}] {tool_name}: {raw_args[:50]}...{Colors.END}")
-                    
-                    # Execute dynamically
+                # Execute dynamically
+                try:
+                    result = await self.plugin_manager.execute_tool(tool_name, raw_args)
                     try:
-                        result = await self.plugin_manager.execute_tool(tool_name, raw_args)
-                        # Attempt to parse JSON result to gauge parse success
-                        try:
-                            json.loads(result)
-                            metrics.record_parse_success(True)
-                        except Exception as e:
-                            app_logger.debug(f"Result parsing failed: {e}")
-                            metrics.record_parse_success(False)
+                        json.loads(result)
+                        metrics.record_parse_success(True)
                     except Exception as e:
-                        app_logger.exception(f"Tool execution failed: {tool_name}")
-                        result = f"[ERROR] La herramienta {tool_name} falló: {e}"
-                    
-                    tool_triggered = True
-                    current_step.update({"tool": tool_name, "query": raw_args, "result_summary": str(result)[:200] + "..."})
-                    
-                    # Extract URLs for UI if present
-                    if isinstance(result, str):
-                        found_urls = re.findall(r'URL: (https?://[^\s\n\]]+)', result)
-                        for url in found_urls:
-                            if url not in extracted_sources.values():
-                                extracted_sources[len(extracted_sources) + 1] = url
-                    
-                    # CHAINING: if SEARCH ran, auto-execute WEB_READ on each result URL
-                    if tool_name == "SEARCH" and isinstance(result, str):
-                        found_urls = re.findall(r'URL: (https?://[^\s\n\]]+)', result)
-                        web_read_results = []
-                        # Limit to first 3 URLs to avoid excessive calls
-                        for i, url in enumerate(found_urls[:3]):
-                            print(f"{Colors.GREEN}[*] Auto-WEB_READ [{i+1}/{min(len(found_urls),3)}]: {url[:60]}...{Colors.END}")
-                            web_content = await self.plugin_manager.execute_tool("WEB_READ", url)
-                            web_read_results.append(f"\n--- WEB_READ [{i+1}] {url} ---\n{web_content}")
-                            current_step.setdefault("chained_reads", []).append(url[:80])
-                        
-                        if web_read_results:
-                            result += "\n\n" + "".join(web_read_results)
-                    
-                    tool_context = f"[RESULTADO {tool_name}]\n{result}\n\nContinua con la tarea. Podes usar otra herramienta si necesitas mas informacion, o entrega la respuesta final."
-                else:
-                    tool_triggered = True
-                    tool_context = f"[ERROR] La herramienta {tool_name} no existe. Revisa las herramientas disponibles en tus instrucciones."
-
+                        app_logger.debug(f"Result parsing failed: {e}")
+                        metrics.record_parse_success(False)
+                except Exception as e:
+                    app_logger.exception(f"Tool execution failed: {tool_name}")
+                    result = f"[ERROR] La herramienta {tool_name} falló: {e}"
+                
+                tool_triggered = True
+                current_step.update({"tool": tool_name, "query": raw_args, "result_summary": str(result)[:200] + "..."})
+                
+                # Extract URLs for UI if present
+                if isinstance(result, str):
+                    found_urls = re.findall(r'URL: (https?://[^\s\n\]]+)', result)
+                    for url in found_urls:
+                        if url not in extracted_sources.values():
+                            extracted_sources[len(extracted_sources) + 1] = url
+                
+                # CHAINING: if SEARCH ran, auto-execute WEB_READ on each result URL
+                if tool_name == "SEARCH" and isinstance(result, str):
+                    found_urls = re.findall(r'URL: (https?://[^\s\n\]]+)', result)
+                    web_read_results = []
+                    for i, url in enumerate(found_urls[:3]):
+                        print(f"{Colors.GREEN}[*] Auto-WEB_READ [{i+1}/{min(len(found_urls),3)}]: {url[:60]}...{Colors.END}")
+                        web_content = await self.plugin_manager.execute_tool("WEB_READ", url)
+                        web_read_results.append(f"\n--- WEB_READ [{i+1}] {url} ---\n{web_content}")
+                        current_step.setdefault("chained_reads", []).append(url[:80])
+                    if web_read_results:
+                        result += "\n\n" + "".join(web_read_results)
+                
+                tool_context = f"[RESULTADO {tool_name}]\n{result}\n\nContinua con la tarea. Podes usar otra herramienta si necesitas mas informacion, o entrega la respuesta final."
+            elif is_tool:
+                tool_triggered = True
+                tool_context = f"[ERROR] La herramienta {tool_name} no existe. Revisa las herramientas disponibles en tus instrucciones."
+            
             if not tool_triggered:
                 # No tool called → final response
                 break
@@ -524,135 +556,34 @@ class AntiAgent:
             messages.append({"role": "user", "content": tool_context})
             print(f"{Colors.CYAN}[*] Procesando resultado de herramienta...{Colors.END}")
             try:
-                response, usage = await self.brain.chat(messages)
+                response, usage = await asyncio.wait_for(self.brain.chat(messages), timeout=120)
                 self.brain.record_usage(usage)
-                prompt_tokens = usage.get("prompt_tokens", 0)
-                self.context_mgr.token_count = prompt_tokens
+                self.context_mgr.token_count = usage.get("prompt_tokens", 0)
                 response = response.replace("<thought>", "").replace("</thought>", "").strip()
             except Exception as e:
                 app_logger.exception(f"Chat inference failed in tool loop")
                 response += f"\n\n[Error al procesar herramienta: {e}]"
                 break
             tool_step += 1
-
-        # Reasoner mode: self-critique
-        if self.reasoner_mode:
-            print(f"{Colors.YELLOW}[*] Reasoner: auto-critica...{Colors.END}")
-            critic_prompt = REASONER_PROMPT.format(user_msg=user_msg, response=response)
-            response, _ = await self.brain.chat([{"role": "user", "content": critic_prompt}])
-
-        # Check if the message is a simple conversational greeting or too short to avoid PRM scorer failures
-        is_greeting = False
-        greeting_words = {"hola", "hello", "hi", "que tal", "como estas", "buenos dias", "buenas tardes", "buenas noches", "buenas", "que onda", "ey", "como va"}
-        clean_msg = re.sub(r'[^\w\s]', '', user_text.lower()).strip()
-        if (clean_msg in greeting_words or len(clean_msg.split()) < 4) and tool_step == 0:
-            is_greeting = True
-
-        # Evaluate response with PRM Scorer (Optional for ultimate local model speed)
-        is_success = True
-        score = 1.0
-        votes = ["skipped"]
-        if self.config.get("enable_prm_scorer", True) and not is_greeting:
-            score = 0.0
-            votes = []
-            try:
-                # print(f"{Colors.BLUE}[*] Scorer evaluando respuesta...{Colors.END}") # Silenced
-                eval_result = await self.scorer.evaluate(response, user_text)
-                score = eval_result["score"]
-                votes = eval_result["votes"]
-                is_success = score >= 0.5
-                if any(v == "fail" for v in votes):
-                    app_logger.warning("Scorer query failed, skipping evaluation")
-                    print(f"{Colors.YELLOW}[!] Advertencia: La consulta del Scorer falló. Saltando evaluación...{Colors.END}")
-                    is_success = True
-                    score = 1.0
-                else:
-                    print(f"{Colors.GREEN}[+] Score: {score} | Votes: {votes}{Colors.END}")
- 
-                # RECURSIVE METACOGNITION: Refinamiento basado en feedback del Scorer (v2.0)
-                retries = 0
-                max_refinement_retries = 2
-                
-                while score < 0.5 and retries < max_refinement_retries:
-                    retries += 1
-                    app_logger.warning(f"Insufficient quality (Score {score}), starting refinement {retries}/{max_refinement_retries}")
-                    print(f"{Colors.RED}[!] Calidad insuficiente (Score {score}). Iniciando refinamiento recursivo {retries}/{max_refinement_retries}...{Colors.END}")
-                    
-                    refinement_prompt = (
-                        f"### AUTO-CRÍTICA METACOGNITIVA\n"
-                        f"Tu respuesta anterior obtuvo un puntaje bajo ({score}) en el benchmark de calidad.\n"
-                        f"INSTRUCCIÓN ORIGINAL: '{user_text}'\n"
-                        f"RESPUESTA ANTERIOR: '{response[:500]}...'\n\n"
-                        f"ERRORES DETECTADOS: Posible redundancia, falta de datos duros (números/porcentajes) o placeholders.\n"
-                        f"ACCIÓN: Genera una versión SUPERIOR. Aplica SINTESIS EXTREMA, elimina introducciones innecesarias y "
-                        f"asegúrate de que cada afirmación esté respaldada por un dato o métrica si es posible."
-                    )
-                    
-                    response, _ = await self.brain.chat([{"role": "user", "content": refinement_prompt}])
-                    response = response.replace("<thought>", "").replace("</thought>", "").strip()
-                    
-                    # Re-evaluar la nueva respuesta
-                    print(f"{Colors.BLUE}[*] Re-evaluando respuesta refinada...{Colors.END}")
-                    eval_result = await self.scorer.evaluate(response, user_text)
-                    score = eval_result["score"]
-                    votes = eval_result["votes"]
-                    print(f"{Colors.GREEN}[+] Nuevo Score: {score} | Votes: {votes}{Colors.END}")
- 
-                if retries > 0:
-                    print(f"{Colors.GREEN}[+] Refinamiento completado exitosamente.{Colors.END}")
-                    is_success = score >= 0.5
- 
-            except Exception as e:
-                app_logger.exception(f"Error in PRM Scorer")
-                print(f"{Colors.RED}[!] Error en Scorer: {e}{Colors.END}")
-        else:
-            if is_greeting:
-                print(f"{Colors.BLUE}[*] Conversación simple detectada. Saltando PRM Scorer (Velocidad Instantánea) ⚡{Colors.END}")
-            else:
-                print(f"{Colors.BLUE}[*] PRM Scorer desactivado. Saltando a respuesta directa (Velocidad Suprema) ⚡{Colors.END}")
-
-
-        # Log and update history
-        self.memory.log_experience(f"Chat: {user_msg}", response, is_success, score, votes)
-        
-        # ACTUALIZACIÓN DE ESTADÍSTICAS DE USO (Decay System)
-        if hasattr(self.memory, 'last_retrieved_topics'):
-            for topic in self.memory.last_retrieved_topics:
-                self.memory.update_usage_stats(topic, is_success)
-
-        self.history.append({"role": "user", "content": user_msg})
-        self.history.append({"role": "assistant", "content": response})
-        
-        # Optimize chat history length dynamically (Local model vs Cloud provider)
-        provider_name = type(self.brain).__name__.lower()
-        is_local = "lmstudio" in provider_name or "ollama" in provider_name
-        
-        if is_local:
-            max_history = self.config.get("max_history_len_local", 10)
-        else:
-            max_history = self.config.get("max_history_len_cloud", 40)
             
-        if len(self.history) > max_history:
-            self.history = self.history[-max_history:]
+        return response, execution_steps, extracted_sources, usage if 'usage' in locals() else None
 
-        # Auto-maintenance
-        self.task_counter += 1
-        if self.task_counter >= 10:
-            # print(f"{Colors.YELLOW}[*] Auto-reflexión conductual (10 mensajes)...{Colors.END}") # Silenced
-            await self._reflect()
-            self.task_counter = 0
 
-        # Autonomous Maintenance by Integrity Matrix (v0.5)
-        await self._check_integrity(prompt_tokens)
-
-        # Final structured response for Web UI
-        return {
-            "response": response,
-            "steps": execution_steps,
-            "sources": extracted_sources,
-            "usage": usage,
-            "score": score
-        }
+    async def _evaluate_response(self, response, user_text, tool_step):
+        """Evaluates response quality using PRM Scorer and optionally refines."""
+        try:
+            result = await self.scorer.evaluate(
+                response=response,
+                instruction=user_text,
+                turn_num=tool_step,
+            )
+            score = result.get("score")
+            votes = result.get("votes", [])
+            is_success = score is not None and score > 0
+            return response, score, is_success, votes
+        except Exception as e:
+            app_logger.warning(f"PRM evaluation failed: {e}")
+            return response, None, False, []
 
     # --- Reasoner ---
 
@@ -667,26 +598,56 @@ class AntiAgent:
         """Reinicia el servidor y refresca el estado del sistema."""
         print(f"{Colors.BLUE}[*] Iniciando ciclo de renovación...{Colors.END}")
         try:
+            # Cleanup zombies before starting new ones
+            self._cleanup_zombies()
+            
             # Matar servidor existente
-            subprocess.run(["pkill", "-f", f"python.*{os.path.join(self.base_dir, 'server.py')}"], capture_output=True)
+            pattern = re.escape(os.path.join(self.base_dir, 'server.py'))
+            subprocess.run(["pkill", "-f", pattern], capture_output=True)
             print(f"{Colors.BLUE}[*] Servidores previos detenidos.{Colors.END}")
             
             # Iniciar nuevo servidor en segundo plano
-            # Usamos el python del venv si existe, sino el del sistema
             python_exe = "python3"
             venv_python = os.path.join(self.base_dir, "venv/bin/python3")
             if os.path.exists(venv_python):
                 python_exe = venv_python
             
             server_script = os.path.join(self.base_dir, "server.py")
-            subprocess.Popen([python_exe, server_script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            proc = subprocess.Popen(
+                [python_exe, server_script], 
+                stdout=subprocess.DEVNULL, 
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                cwd=self.base_dir
+            )
+            # Store process to avoid zombies
+            self.server_proc = proc
             print(f"{Colors.GREEN}[+] Nuevo servidor iniciado con el código actualizado.{Colors.END}")
             
-            # Pequeña pausa para asegurar el arranque
+            # Pausa y health check
             await asyncio.sleep(1)
-            return "✅ Sistema renovado. El dashboard y el servidor ahora corren con la última versión."
+            try:
+                import requests
+                # Try to hit the health endpoint of the local server
+                health_res = requests.get("http://127.0.0.1:8000/health", timeout=2)
+                if health_res.status_code == 200:
+                    return "✅ Sistema renovado. El dashboard y el servidor ahora corren con la última versión."
+                else:
+                    return f"⚠️ Servidor iniciado pero salud no confirmada (Status: {health_res.status_code})."
+            except Exception as e:
+                return f"⚠️ Servidor iniciado pero no se pudo contactar el endpoint de salud: {e}"
+                
         except Exception as e:
             return f"❌ Error al renovar: {e}"
+
+    def _cleanup_zombies(self):
+        """Checks and cleans up the server process if it's a zombie."""
+        if hasattr(self, 'server_proc') and self.server_proc:
+            if self.server_proc.poll() is not None:
+                app_logger.debug("Server process was already dead, cleaned up.")
+            else:
+                # Process is still running, nothing to clean specifically unless we want to kill it
+                pass
 
     async def _force_search(self, query):
         from src.tools import duckduckgo_search
@@ -732,7 +693,7 @@ class AntiAgent:
             ]
             for label, d in search_dirs:
                 path = os.path.join(d, safe_name)
-                if os.path.exists(path):
+                if os.path.exists(path) and os.path.isfile(path):
                     os.remove(path)
                     print(f"{Colors.RED}[!] Eliminado: {path}{Colors.END}")
                     return f"[ADMIN] Archivo '{safe_name}' eliminado de {label}/."
@@ -947,6 +908,17 @@ Contenido del MCP instalado. Editar este archivo para personalizar el comportami
         if not os.path.exists(mcp_dir):
             return f"MCP '{mcp_id}' no encontrado."
         
+        # Log directory size before removal
+        try:
+            total_size = 0
+            for dirpath, dirnames, filenames in os.walk(mcp_dir):
+                for f in filenames:
+                    fp = os.path.join(dirpath, f)
+                    total_size += os.path.getsize(fp)
+            app_logger.info(f"Removing MCP {safe_id}, directory size: {total_size} bytes")
+        except Exception as e:
+            app_logger.debug(f"Could not calculate size for MCP {safe_id}: {e}")
+
         shutil.rmtree(mcp_dir)
         
         # Reload skills if available
@@ -1103,7 +1075,7 @@ ESTADO DEL SISTEMA (Sentinel v1.3 Active)
         
         # Re-inicializar si cambió el context del modelo
         if self.context_mgr.model_context_length != model_context:
-            self.context_mgr = ContextManager(model_context)
+            self.context_mgr.update_context_length(model_context)
         
         # Sync scorer model
         self.scorer.prm_model = self.brain.model
