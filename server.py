@@ -2,13 +2,6 @@ import os
 import sys
 import threading
 import secrets
-import json
-import webbrowser
-import uuid
-import asyncio
-import logging
-import time
-from http.server import HTTPServer, SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 # --- SECURITY EARLY-BOOT ---
 SHARED_SECRET = b""
@@ -43,6 +36,14 @@ def _init_security():
 _init_security()
 # ---------------------------
 
+import json
+import webbrowser
+import uuid
+import asyncio
+import logging
+import time
+from http.server import HTTPServer, SimpleHTTPRequestHandler, ThreadingHTTPServer
+
 # Corrected imports for the current structure
 from src.agent import AntiAgent
 from src.tools import read_file
@@ -53,15 +54,22 @@ agent = None
 active_jobs = {}
 active_jobs_lock = threading.Lock()
 
-# Load server port from config
+# Load server port from config (Local-First: config.local.json > config.json)
 def _load_port():
-    try:
-        with open("config.json") as f:
-            cfg = json.load(f)
-            return cfg.get("server_port", 8000)
-    except Exception:
-        logging.exception("Failed to load server config")
-        return 8000
+    for candidate in ("config.local.json", "config.json"):
+        if os.path.exists(candidate):
+            try:
+                with open(candidate, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+                return cfg.get("server_port", 8000)
+            except Exception:
+                logging.exception("Failed to load server config from %s", candidate)
+                return 8000
+    logging.error(
+        "Configuration file not found. Please copy config.json.example to "
+        "config.local.json and fill in your keys."
+    )
+    return 8000
 
 SERVER_PORT = _load_port()
 
@@ -101,6 +109,10 @@ def save_mcps(mcps):
 
 def background_agent_task(job_id, message, image_data):
     """Ejecuta el agente en segundo plano y guarda el resultado en active_jobs."""
+    from src.logger import set_request_id
+    import uuid as _uuid
+    rid = _uuid.uuid4().hex[:12]
+    set_request_id(rid)
     try:
         response_obj = run_async(agent.handle_command(message, image_data=image_data))
         
@@ -108,6 +120,7 @@ def background_agent_task(job_id, message, image_data):
             response_obj = {"response": "Comando ejecutado.", "steps": []}
         if isinstance(response_obj, str):
             response_obj = {"response": response_obj, "steps": []}
+        response_obj["request_id"] = rid
             
         with active_jobs_lock:
             active_jobs[job_id]["status"] = "completed"
@@ -323,8 +336,9 @@ class APIHandler(SimpleHTTPRequestHandler):
             return
 
         elif path_base.startswith('/api/file/'):
-            filename = path_base.replace('/api/file/', '').split('/')[0]
-            if '..' in filename or '/' in filename:
+            raw = path_base.replace('/api/file/', '')
+            filename = os.path.basename(raw.split('/')[0])
+            if not filename or '..' in filename or '/' in filename or filename.startswith('.'):
                 self.send_error(400, "Invalid filename")
                 return
             content = agent.memory.read_file(filename) if hasattr(agent.memory, 'read_file') else ""

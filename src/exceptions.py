@@ -4,7 +4,7 @@ Anti Exception Hierarchy.
 All custom exceptions in the project derive from AntiError.
 
 Usage:
-    from src.exceptions import ToolError, ProviderError, MemoryError
+    from src.exceptions import ToolError, ProviderError, MemoryStorageError
 
     raise ToolError("Sandbox execution failed")
 """
@@ -25,9 +25,13 @@ class ProviderError(AntiError):
     pass
 
 
-class MemoryError(AntiError):
+class MemoryStorageError(AntiError):
     """Raised when memory or archive operations fail (read/write/query)."""
     pass
+
+
+# Backward-compatible alias — prefer MemoryStorageError in new code
+MemoryError = MemoryStorageError
 
 
 class BrainConnectionError(AntiError):

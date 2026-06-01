@@ -2,6 +2,8 @@ import os
 import json
 import re
 import logging
+import asyncio
+import concurrent.futures
 from datetime import datetime
 
 from src.logger import AppLogger
@@ -117,7 +119,7 @@ class MemoryManager:
     # Default: keep max 5000 log lines (rotate older)
     MAX_LOG_LINES = 5000
     
-    def __init__(self, memory_path, workspace_path=None):
+    def __init__(self, memory_path, workspace_path=None, event_loop=None):
         self.memory_path = memory_path
         self.logs_path = os.path.join(memory_path, "logs.jsonl")
         self.patterns_path = os.path.join(memory_path, "patterns.md")
@@ -126,6 +128,9 @@ class MemoryManager:
         self.usage_stats_path = os.path.join(memory_path, "usage_stats.json")
         self.workspace_path = workspace_path
         self.last_retrieved_topics = []
+        
+        # Store the orchestrator's event loop for thread-safe async calls
+        self._event_loop = event_loop
         
         if not os.path.exists(self.engrams_path):
             os.makedirs(self.engrams_path)
@@ -137,6 +142,44 @@ class MemoryManager:
         
         # Cold Path Initialization
         self.archive = ArchiveManager(os.path.join(memory_path, "cold_archive.db"))
+
+    def _run_async(self, coro):
+        """
+        Run async coroutine synchronously using the orchestrator's event loop.
+        Uses run_coroutine_threadsafe to avoid creating new loops (fixes leak).
+        Falls back to asyncio.run() if no loop is available.
+        """
+        # Case 1: We have a reference to the orchestrator's loop
+        if self._event_loop and self._event_loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(coro, self._event_loop)
+            try:
+                return future.result(timeout=30)
+            except concurrent.futures.TimeoutError:
+                app_logger.warning("[Memory] _run_async timed out after 30s")
+                return None
+            except Exception as e:
+                app_logger.error(f"[Memory] _run_async failed: {e}")
+                return None
+
+        # Case 2: No loop stored or loop not running — try get_event_loop
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # We're in a thread with a running loop — use run_coroutine_threadsafe
+                future = asyncio.run_coroutine_threadsafe(coro, loop)
+                try:
+                    return future.result(timeout=30)
+                except concurrent.futures.TimeoutError:
+                    app_logger.warning("[Memory] _run_async timed out after 30s")
+                    return None
+                except Exception as e:
+                    app_logger.error(f"[Memory] _run_async failed: {e}")
+                    return None
+            else:
+                return loop.run_until_complete(coro)
+        except RuntimeError:
+            # No event loop at all — create one temporarily
+            return asyncio.run(coro)
 
     # --- Workspace helpers ---
 
@@ -156,8 +199,10 @@ class MemoryManager:
     # --- Logging ---
 
     def log_experience(self, task, result, success, score=None, votes=None):
+        from src.logger import get_request_id
         entry = {
             "timestamp": datetime.now().isoformat(),
+            "request_id": get_request_id(),
             "task": task,
             "result": result[:2000],
             "success": success,
@@ -181,7 +226,7 @@ class MemoryManager:
             f.write(json.dumps(entry) + "\n")
             
         # Also log to Cold Path for permanent history
-        self.archive.log_to_history(entry)
+        self._run_async(self.archive.log_to_history(entry))
 
     def get_recent_logs(self, limit=10):
         if not os.path.exists(self.logs_path):
@@ -216,7 +261,7 @@ class MemoryManager:
         
         try:
             # Guardar en SQLite (Hot & Cold unificado)
-            self.archive.archive_engram(topic, content)
+            self._run_async(self.archive.archive_engram(topic, content))
         except MemoryError as e:
             app_logger.error(f"Failed to save engram '{topic}': {e}")
             return f"Error al guardar Engram '{topic}'."
@@ -277,7 +322,7 @@ class MemoryManager:
             # Guardar entidades en el archivo de archive
             for entity_val, count in top_entities:
                 if len(entity_val) >= 4:  # Ignorar entidades muy cortas
-                    success = self.archive.add_entity(obs_id, "keyword", entity_val)
+                    success = self._run_async(self.archive.add_entity(obs_id, "keyword", entity_val))
             
             # Buscar patrones especiales
             for pat_name, pat_regex in patterns.items():
@@ -285,7 +330,7 @@ class MemoryManager:
                 for match in matches:
                     if len(match.strip()) >= 4:
                         entity_type = entity_type_map.get(pat_name, "mention")
-                        self.archive.add_entity(obs_id, entity_type, match.strip()[:200])
+                        self._run_async(self.archive.add_entity(obs_id, entity_type, match.strip()[:200]))
                         
         except Exception as e:
             app_logger.exception(f"[Memory] Error en auto-extracción para '{topic}'")
@@ -334,13 +379,16 @@ class MemoryManager:
         """Elimina engrams de la base de datos SQLite por topic."""
         if not topics_to_purge:
             return
-        conn = self.archive._get_conn()
-        cursor = conn.cursor()
-        cursor.executemany(
-            "DELETE FROM engram_archive WHERE topic = ?",
-            [(t,) for t in topics_to_purge]
-        )
-        conn.commit()
+        
+        async def purge():
+            conn = await self.archive._get_conn()
+            await conn.executemany(
+                "DELETE FROM engram_archive WHERE topic = ?",
+                [(t,) for t in topics_to_purge]
+            )
+            await conn.commit()
+            
+        self._run_async(purge())
 
     def decay_old_engrams(self, max_fallos=3):
         """Elimina engrams obsoletos de SQLite y usage_stats.json."""
@@ -439,7 +487,7 @@ class MemoryManager:
             return "Consulta vacia."
             
         # 1. Obtener candidatos de SQLite
-        candidates = self.archive.search_archive(query, limit=20)
+        candidates = self._run_async(self.archive.search_archive(query, limit=20))
         if not candidates:
             return "No se encontraron engrams relevantes."
 
@@ -550,7 +598,7 @@ class MemoryManager:
                     omni_parts.append(f"### ARCHIVOS LOCALES RELEVANTES:\n" + "\n".join(md_output))
 
         # 4. Cold Archive (Long-term Factual)
-        archive_results = self.archive.search_archive(query, limit=3)
+        archive_results = self._run_async(self.archive.search_archive(query, limit=3))
         if archive_results:
             archive_fmt = "\n".join([f"- {r['topic']} ({r['timestamp']}): {r['content'][:400]}..." for r in archive_results])
             omni_parts.append(f"### ARCHIVO HISTÓRICO (Cold Path):\n{archive_fmt}")
@@ -632,7 +680,7 @@ class MemoryManager:
             return {"success": False, "entity_id": None, "message": "Value demasiado corto"}
         
         try:
-            entity_id = self.archive.add_entity(observation_id, entity_type, value.strip())
+            entity_id = self._run_async(self.archive.add_entity(observation_id, entity_type, value.strip()))
             app_logger.info(f"[Memory] Entidad creada: {entity_type}={value[:50]} (id={entity_id})")
             return {"success": True, "entity_id": entity_id, "message": f"Entidad {entity_type} creada"}
         except MemoryError:
@@ -660,7 +708,7 @@ class MemoryManager:
             return {"success": False, "edge_id": None, "message": f"Relación inválida. Usar: {valid_relations}"}
         
         try:
-            edge_id = self.archive.add_edge(source_id, target_id, relation_type)
+            edge_id = self._run_async(self.archive.add_edge(source_id, target_id, relation_type))
             app_logger.info(f"[Memory] Edge creado: {source_id} --[{relation_type}]--> {target_id} (id={edge_id})")
             return {"success": True, "edge_id": edge_id, "message": f"Edge {relation_type} creado"}
         except MemoryError:

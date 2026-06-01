@@ -57,7 +57,7 @@ Connect to any LLM backend — local or cloud:
 | Minimax | Cloud | Requires API key |
 | OpenAI-compatible | Any | Custom URL |
 
-Set `"provider": "auto"` in `config.json` and Anti auto-detects the first available backend.
+Set `"provider": "auto"` in `config.local.json` and Anti auto-detects the first available backend.
 
 ### Persistent Memory (Engrams)
 Every conversation, decision, and discovery is stored as structured **engrams** in SQLite with FTS5 full-text search:
@@ -166,7 +166,25 @@ Anti auto-detects your running LLM backend and connects.
 
 ### Configuration
 
-Create or edit `config.json` in the project root:
+Anti uses a **Local-First** configuration strategy. The file `config.json` is **gitignored** — your secrets never leave your machine. A safe template is committed as `config.json.example`.
+
+```bash
+# 1. Copy the template to your personal config
+cp config.json.example config.local.json
+
+# 2. Edit config.local.json and fill in your API keys
+nano config.local.json
+```
+
+Resolution order at startup:
+
+1. `config.local.json` (your personal file — may contain API keys) — **preferred**
+2. `config.json` (team-shared defaults — also gitignored) — **fallback**
+3. If neither exists, the agent refuses to start with a clear error:
+
+> Configuration file not found. Please copy `config.json.example` to `config.local.json` and fill in your keys.
+
+Example structure:
 
 ```json
 {
@@ -238,7 +256,7 @@ When you ask Anti to do something, it automatically selects the right tool:
 You: "Search for the latest Python 3.13 release notes"
 Anti: [Calls SEARCH tool → fetches results → summarizes]
 
-You: "Read the file config.json"
+You: "Read the file config.local.json"
 Anti: [Calls READ tool → returns file contents]
 
 You: "Run the tests"
@@ -301,12 +319,16 @@ Anti: [Calls RUN tool → executes in Docker sandbox → returns output]
 |-----------|------|------|
 | **Brain** | `src/brain.py` | LLM communication via httpx (async) |
 | **Providers** | `src/providers/` | Multi-backend adapters (8 providers) |
-| **Agent** | `src/agent.py` | Main orchestrator, ReAct loop, tool routing |
-| **Memory** | `src/memory.py` | Persistent JSON-based engram storage |
+| **Agent** | `src/agent.py` | Main orchestrator, delegates to specialized modules |
+| **Renderer** | `src/renderer.py` | Markdown rendering, banner display |
+| **Prompt Builder** | `src/prompt_builder.py` | System prompt construction (omni-context, skills) |
+| **Tool Orchestrator** | `src/tool_orchestrator.py` | ReAct tool loop (anti-loop, parallel chaining) |
+| **Command Handler** | `src/command_handler.py` | Command routing (help, memory, MCP, admin) |
+| **Memory** | `src/memory.py` | Persistent engram storage (SQLite + FTS5) |
 | **Archive** | `src/archive.py` | SQLite FTS5 + Knowledge Graph (aiosqlite) |
 | **Scorer** | `src/scorer.py` | PRM response quality evaluation |
 | **Evolver** | `src/evolver.py` | Autonomous skill evolution |
-| **Compactor** | `src/compactor.py` | Context window management |
+| **Context Manager** | `src/context_manager.py` | Context window management |
 | **Plugins** | `src/plugins/` | Dynamic tool registration |
 | **TUI** | `cmd/tui/` | Go Bubble Tea terminal interface |
 | **Web** | `extras/web/` | HTML/CSS dashboard |
@@ -458,7 +480,11 @@ System prompts include explicit delimiters to resist injection attacks:
 ```
 Anti/
 ├── src/                    # Python source
-│   ├── agent.py           # Main orchestrator
+│   ├── agent.py           # Main orchestrator (slimmed, delegates to modules)
+│   ├── renderer.py        # Markdown rendering & banner display
+│   ├── prompt_builder.py  # System prompt construction (omni-context, skills)
+│   ├── tool_orchestrator.py # ReAct tool loop (anti-loop, parallel chaining)
+│   ├── command_handler.py # Command routing (help, memory, MCP, admin)
 │   ├── brain.py           # LLM interface (httpx async)
 │   ├── archive.py         # SQLite + FTS5 + KG (aiosqlite)
 │   ├── providers/         # 8 LLM provider adapters
@@ -466,7 +492,9 @@ Anti/
 │   ├── tools/             # Core tool implementations
 │   ├── scorer.py          # PRM quality scoring
 │   ├── evolver.py         # Skill evolution
-│   └── compactor.py       # Context management
+│   ├── memory.py          # Persistent memory (engrams, skills, archive)
+│   ├── context_manager.py # Context window management
+│   └── compactor.py       # Context compaction
 ├── cmd/tui/               # Go TUI (Bubble Tea)
 ├── extras/web/            # Web dashboard
 ├── tests/                 # Test suite
@@ -474,8 +502,9 @@ Anti/
 ├── scripts/               # Utility scripts
 ├── docs/                  # Documentation
 ├── main.py                # CLI entry point
-├── server.py              # FastAPI backend
-├── config.json            # Configuration
+├── server.py              # HTTP backend (http.server, HMAC-signed)
+├── config.json.example    # Configuration template (tracked, no secrets)
+├── config.local.json      # Personal config (gitignored, may contain keys)
 └── requirements.txt       # Python dependencies
 ```
 
