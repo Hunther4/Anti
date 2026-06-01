@@ -108,7 +108,7 @@ class AntiAgent:
         self.history = []
         self.reasoner_mode = False
 
-        url = self.config.get("lm_studio_url", self.DEFAULT_LM_URL)
+        url = getattr(self.brain, 'base_url', self.config.get("lm_studio_url", self.DEFAULT_LM_URL))
         self.scorer = PRMScorer(prm_url=url, prm_model=self.brain.model)
         self.evolver = SkillEvolver(base_url=url, model="local-model")
 
@@ -178,7 +178,7 @@ class AntiAgent:
         if image_data:
             print(f"{Colors.YELLOW}[i] Imagen recibida para analisis.{Colors.END}")
             user_content = [
-                {"type": "text", "text": user_msg if user_msg else "Analiza esta imagen."},
+                {"type": "text", "text": user_text if user_text else "Analiza esta imagen."},
                 {"type": "image_url", "image_url": {"url": image_data}}
             ]
         else:
@@ -188,7 +188,6 @@ class AntiAgent:
 
         # 3. Initial Chat Inference
         start_timestamp = time.time()
-        metrics.record_inference(model=self.brain.model, ttft_ms=0, tokens_generated=0, duration_seconds=0)
 
         try:
             response, usage = await asyncio.wait_for(self.brain.chat(messages), timeout=120)
@@ -212,11 +211,11 @@ class AntiAgent:
         else:
             response_str = str(response)
 
-        if "Error conectando con LM Studio" in response_str:
-            app_logger.error(f"LM Studio connection error: {response_str}")
+        if response_str.startswith("Error") and ("conectando" in response_str or "connecting" in response_str or "Error en" in response_str):
+            app_logger.error(f"Provider connection error: {response_str}")
             print(f"{Colors.RED}[!] {response_str}{Colors.END}")
             return {
-                "response": f"No pude procesar tu solicitud. Error de LM Studio: {response_str}",
+                "response": f"No pude procesar tu solicitud. Error de conexion: {response_str}",
                 "steps": [], "sources": {},
                 "usage": usage if 'usage' in locals() else {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "duration": 0, "tps": 0},
                 "score": 0.0
@@ -470,10 +469,6 @@ class AntiAgent:
         except KeyboardInterrupt:
             pass
         finally:
-            try:
-                asyncio.run(self.close())
-            except Exception:
-                pass
             os._exit(0)
 
     async def _async_run(self, is_local: bool):

@@ -13,40 +13,49 @@ import os
 import json
 import asyncio
 import logging
-import requests
 from typing import Optional, Callable, List, Dict
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-# === Optional: TF-IDF / Cosine Similarity dependencies ===
+# === Optional: TF-IDF / Cosine Similarity dependencies (LAZY) ===
 _HAS_SKLEARN = False
 _TFIDF_VECTORIZER = None
 
-try:
-    from sklearn.feature_extraction.text import TfidfVectorizer
-    from sklearn.metrics.pairwise import cosine_similarity
-    _HAS_SKLEARN = True
-except ImportError:
-    TfidfVectorizer = None
-    cosine_similarity = None
+def _check_sklearn():
+    """Lazy-check for sklearn availability."""
+    global _HAS_SKLEARN
+    if not _HAS_SKLEARN:
+        try:
+            import sklearn.feature_extraction.text
+            _HAS_SKLEARN = True
+        except (ImportError, Exception):
+            _HAS_SKLEARN = False
+    return _HAS_SKLEARN
 
 # === Optional: SentenceTransformer (preferred, but heavy) ===
 _HAS_SENTENCE_TRANSFORMER = False
 _SENTENCE_MODEL = None
 
-try:
-    from sentence_transformers import SentenceTransformer
-    _HAS_SENTENCE_TRANSFORMER = True
-except ImportError:
-    SentenceTransformer = None
+def _check_sentence_transformer():
+    """Lazy-check for sentence_transformers availability."""
+    global _HAS_SENTENCE_TRANSFORMER
+    if not _HAS_SENTENCE_TRANSFORMER:
+        try:
+            import sentence_transformers
+            _HAS_SENTENCE_TRANSFORMER = True
+        except (ImportError, Exception):
+            _HAS_SENTENCE_TRANSFORMER = False
+    return _HAS_SENTENCE_TRANSFORMER
 
 
 def _get_embedding_model():
     """Lazy-load the embedding model — SentenceTransformer preferred, TF-IDF fallback."""
     global _SENTENCE_MODEL, _TFIDF_VECTORIZER
-    if _HAS_SENTENCE_TRANSFORMER and _SENTENCE_MODEL is None:
+
+    if _check_sentence_transformer() and _SENTENCE_MODEL is None:
         try:
+            from sentence_transformers import SentenceTransformer
             _SENTENCE_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
             logger.info("Using SentenceTransformer 'all-MiniLM-L6-v2' for embeddings.")
         except Exception as e:
@@ -55,10 +64,13 @@ def _get_embedding_model():
     if _SENTENCE_MODEL is not None:
         return "sentence_transformer", _SENTENCE_MODEL
 
-    if _TFIDF_VECTORIZER is None and _HAS_SKLEARN:
-        _TFIDF_VECTORIZER = TfidfVectorizer(stop_words="english", max_features=5000)
+    if _check_sklearn():
+        if _TFIDF_VECTORIZER is None:
+            from sklearn.feature_extraction.text import TfidfVectorizer
+            _TFIDF_VECTORIZER = TfidfVectorizer(stop_words="english", max_features=5000)
+        return "tfidf", _TFIDF_VECTORIZER
 
-    return "tfidf", _TFIDF_VECTORIZER
+    return "none", None
 
 
 class HybridCompactor:
@@ -149,6 +161,7 @@ class HybridCompactor:
     def _call_llm(self, prompt: str, max_tokens: int = 256) -> Optional[str]:
         """Call a local LLM via HTTP endpoint (LM Studio / LocalAI compatible)."""
         import time
+        import requests
 
         base_url = self.config.get("llm_base_url", "http://127.0.0.1:1234/v1")
         model = self.config.get("llm_model", "local-model")
@@ -161,31 +174,31 @@ class HybridCompactor:
             "temperature": 0.3,
         }
 
-        session = requests.Session()
         max_retries = 3
 
-        for attempt in range(max_retries):
-            try:
-                resp = session.post(url, json=payload, timeout=30)
-                resp.raise_for_status()
-                data = resp.json()
-                content = data["choices"][0]["message"]["content"]
-                return content.strip()
-            except requests.exceptions.HTTPError as e:
-                status = e.response.status_code if e.response is not None else 0
-                if status in (429, 503) and attempt < max_retries - 1:
-                    wait = (2 ** attempt) * 0.5
-                    logger.warning(
-                        f"[Compactor] LLM returned {status}, "
-                        f"retrying in {wait:.1f}s (attempt {attempt+1}/{max_retries})"
-                    )
-                    time.sleep(wait)
-                    continue
-                logger.warning(f"[Compactor] LLM summary call failed: {e}")
-                return None
-            except Exception as e:
-                logger.warning(f"[Compactor] LLM summary call failed: {e}")
-                return None
+        with requests.Session() as session:
+            for attempt in range(max_retries):
+                try:
+                    resp = session.post(url, json=payload, timeout=30)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    content = data["choices"][0]["message"]["content"]
+                    return content.strip()
+                except requests.exceptions.HTTPError as e:
+                    status = e.response.status_code if e.response is not None else 0
+                    if status in (429, 503) and attempt < max_retries - 1:
+                        wait = (2 ** attempt) * 0.5
+                        logger.warning(
+                            f"[Compactor] LLM returned {status}, "
+                            f"retrying in {wait:.1f}s (attempt {attempt+1}/{max_retries})"
+                        )
+                        time.sleep(wait)
+                        continue
+                    logger.warning(f"[Compactor] LLM summary call failed: {e}")
+                    return None
+                except Exception as e:
+                    logger.warning(f"[Compactor] LLM summary call failed: {e}")
+                    return None
 
         return None
     
@@ -489,7 +502,8 @@ Mejora los compression guidelines.
             return float(np.dot(vec1, vec2) / (norm1 * norm2))
         
         # TF-IDF → sparse matrices
-        if hasattr(vec1, "toarray") and _HAS_SKLEARN:
+        if hasattr(vec1, "toarray") and _check_sklearn():
+            from sklearn.metrics.pairwise import cosine_similarity
             return float(cosine_similarity(vec1, vec2)[0][0])
         
         return 0.0
@@ -499,7 +513,7 @@ Mejora los compression guidelines.
         if not text1 or not text2:
             return 0.0
         
-        if not _HAS_SKLEARN and not _HAS_SENTENCE_TRANSFORMER:
+        if not _check_sklearn() and not _check_sentence_transformer():
             # Fallback to Jaccard if no ML libs available
             set1 = set(text1.lower().split())
             set2 = set(text2.lower().split())
@@ -507,10 +521,21 @@ Mejora los compression guidelines.
             union = len(set1 | set2)
             return intersection / union if union > 0 else 0.0
         
-        vec1 = self._get_text_embedding(text1)
-        vec2 = self._get_text_embedding(text2)
+        kind, model = _get_embedding_model()
         
-        return self._cosine_similarity_vectors(vec1, vec2)
+        if kind == "sentence_transformer":
+            vec1 = self._get_text_embedding(text1)
+            vec2 = self._get_text_embedding(text2)
+            return self._cosine_similarity_vectors(vec1, vec2)
+        
+        if kind == "tfidf" and _check_sklearn():
+            from sklearn.feature_extraction.text import TfidfVectorizer
+            from sklearn.metrics.pairwise import cosine_similarity
+            vectorizer = TfidfVectorizer(stop_words="english", max_features=5000)
+            vectors = vectorizer.fit_transform([text1, text2])
+            return float(cosine_similarity(vectors[0], vectors[1])[0][0])
+        
+        return 0.0
     
     def deduplicate_messages(self, messages: List[Dict], threshold: float = 0.85) -> List[Dict]:
         """

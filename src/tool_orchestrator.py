@@ -24,6 +24,7 @@ async def run_tool_loop(
     Coordinates tool execution, handles automatic chaining, and prevents infinite loops.
     Returns: (response, execution_steps, extracted_sources, usage)
     """
+    messages = list(messages)  # Work on a copy to avoid mutating caller's list
     MAX_TOOL_STEPS = 10
     tool_step = 0
     execution_steps = []
@@ -77,12 +78,15 @@ async def run_tool_loop(
                     if found_urls:
                         print(f"{Colors.GREEN}[*] Dependency found: {len(found_urls)} URLs to read in parallel...{Colors.END}")
                         tasks = [plugin_manager.execute_tool("WEB_READ", url) for url in found_urls[:3]]
-                        web_contents = await asyncio.gather(*tasks)
+                        web_contents = await asyncio.gather(*tasks, return_exceptions=True)
 
                         chained_data = []
                         for i, content in enumerate(web_contents):
-                            chained_data.append(f"\n--- SOURCE {i+1}: {found_urls[i]} ---\n{content}")
-                            extracted_sources[len(extracted_sources) + 1] = found_urls[i]
+                            if isinstance(content, Exception):
+                                chained_data.append(f"\n--- SOURCE {i+1}: {found_urls[i]} ---\n[ERROR: {content}]")
+                            else:
+                                chained_data.append(f"\n--- SOURCE {i+1}: {found_urls[i]} ---\n{content}")
+                                extracted_sources[len(extracted_sources) + 1] = found_urls[i]
 
                         result += "\n\n[AUTOMATIC DEPTH-READ]\n" + "".join(chained_data)
 

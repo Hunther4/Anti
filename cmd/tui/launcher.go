@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"context"
 	"syscall"
 	"time"
 
@@ -115,9 +116,11 @@ type model struct {
 	apiInput        textinput.Model
 	chatInput       textinput.Model
 	chatHistory     []string
-	activeJobId     string
-	chatViewport    viewport.Model
-	viewingResponse bool
+	activeJobId      string
+	pollCount        int
+	chatViewport     viewport.Model
+	viewingResponse  bool
+	confirmDeleteLogs bool
 	width           int
 	height          int
 	err             error
@@ -187,7 +190,7 @@ func (m *model) sendChatMessage(msg string) tea.Cmd {
 func (m *model) pollJobStatus(jobId string) tea.Cmd {
 	return func() tea.Msg {
 		url := fmt.Sprintf("http://localhost:8000/api/job/%s", jobId)
-		resp, err := http.Get(url)
+		resp, err := SignedGet(url)
 		if err != nil {
 			return chatErrorMsg{err: err}
 		}
@@ -405,7 +408,9 @@ func checkStatusAsync(lmStudioURL, ollamaURL string) tea.Cmd {
 
 		go func() {
 			defer wg.Done()
-			out, err := exec.Command("docker", "inspect", "-f", "{{.State.Running}}", "anti-sandbox").Output()
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			out, err := exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.State.Running}}", "anti-sandbox").Output()
 			if err == nil {
 				sandboxOnline = strings.TrimSpace(string(out)) == "true"
 			}
@@ -487,6 +492,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case pollContinueMsg:
 		if m.activeJobId != "" {
+			m.pollCount++
+			if m.pollCount > 30 {
+				m.chatHistory = append(m.chatHistory, "Request timed out after 30s")
+				m.activeJobId = ""
+				m.pollCount = 0
+				return m, nil
+			}
 			return m, m.pollJobStatus(m.activeJobId)
 		}
 		return m, nil
@@ -541,8 +553,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cwd, _ := os.Getwd()
 				_ = ResetSandbox(cwd)
 				cmd = m.asyncCheckStatus()
-			case "p":
+		case "p":
+			if m.confirmDeleteLogs {
 				_ = os.Remove("memory/logs.jsonl")
+				m.confirmDeleteLogs = false
+				m.chatHistory = append(m.chatHistory, "Logs eliminados.")
+				m.refreshChatViewport()
+			} else {
+				m.confirmDeleteLogs = true
+				m.chatHistory = append(m.chatHistory, "¿Eliminar logs? Presioná 'p' otra vez para confirmar.")
+				m.refreshChatViewport()
+			}
+			}
+			if m.confirmDeleteLogs && msg.String() != "p" {
+				m.confirmDeleteLogs = false
 			}
 		} else if m.screen == ScreenChat {
 			if m.viewingResponse {
@@ -557,17 +581,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, vpCmd
 			}
 			switch msg.Type {
-			case tea.KeyEnter:
-				input := m.chatInput.Value()
-				if input == "" {
-					return m, nil
-				}
-				m.chatHistory = append(m.chatHistory, "User: "+input)
-				m.chatInput.SetValue("")
-				m.activeJobId = ""
-				m.viewingResponse = false
+		case tea.KeyEnter:
+			input := m.chatInput.Value()
+			if input == "" {
+				return m, nil
+			}
+			if m.activeJobId != "" {
+				m.chatHistory = append(m.chatHistory, "Please wait for the current request to complete.")
 				m.refreshChatViewport()
-				return m, m.sendChatMessage(input)
+				return m, nil
+			}
+			m.chatHistory = append(m.chatHistory, "User: "+input)
+			m.chatInput.SetValue("")
+			m.activeJobId = ""
+			m.pollCount = 0
+			m.viewingResponse = false
+			m.refreshChatViewport()
+			return m, m.sendChatMessage(input)
 			}
 			var cmd2 tea.Cmd
 			m.chatInput, cmd2 = m.chatInput.Update(msg)
@@ -784,13 +814,21 @@ func startManagedServer(pythonPath string) error {
 	}
 	cmd.Stdin = r
 
-	if logFile, ferr := os.OpenFile("logs/server.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); ferr == nil {
+	var logFile, devNull *os.File
+	if ferr := os.MkdirAll("logs", 0755); ferr == nil {
+		if f, err := os.OpenFile("logs/server.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
+			logFile = f
+		}
+	}
+	if logFile != nil {
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
 	} else {
-		devNull, _ := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-		cmd.Stdout = devNull
-		cmd.Stderr = devNull
+		if f, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0); err == nil {
+			devNull = f
+			cmd.Stdout = devNull
+			cmd.Stderr = devNull
+		}
 	}
 
 	if err := cmd.Start(); err != nil {
@@ -799,6 +837,14 @@ func startManagedServer(pythonPath string) error {
 		return fmt.Errorf("start server: %w", err)
 	}
 	_ = r.Close() // parent doesn't need the read end; child inherited its copy
+
+	// Close parent's copies of stdout/stderr fds (child inherited them)
+	if logFile != nil {
+		logFile.Close()
+	}
+	if devNull != nil {
+		devNull.Close()
+	}
 
 	if _, err := w.Write(secret); err != nil {
 		return fmt.Errorf("send secret: %w", err)
