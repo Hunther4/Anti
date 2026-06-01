@@ -37,6 +37,8 @@ var (
 	gray    = lipgloss.Color("#94a3b8")
 	darkGray = lipgloss.Color("#4b5563")
 	purple  = lipgloss.Color("#5f5f87")
+	yellow  = lipgloss.Color("#ffcc00")
+
 
 	titleStyle = lipgloss.NewStyle().
 			Foreground(cyan).
@@ -810,17 +812,22 @@ func (m model) View() string {
 
 func (m model) viewChat() string {
 	var chatArea strings.Builder
+	
+	userStyle := lipgloss.NewStyle().Foreground(cyan).Bold(true)
+	antiStyle := lipgloss.NewStyle().Foreground(magenta).Bold(true)
+	errorStyle := lipgloss.NewStyle().Foreground(gray).Italic(true)
+
 	for _, msg := range m.chatHistory {
 		if strings.HasPrefix(msg, "User: ") {
-			chatArea.WriteString(fmt.Sprintf("[cyan]User:[/]\n%s\n\n", msg[6:]))
+			chatArea.WriteString(userStyle.Render("User:") + " " + msg[6:] + "\n\n")
 		} else if strings.HasPrefix(msg, "Anti: ") {
-			chatArea.WriteString(fmt.Sprintf("[magenta]Anti:[/]\n%s\n\n", msg[6:]))
+			chatArea.WriteString(antiStyle.Render("Anti:") + " " + msg[6:] + "\n\n")
 		} else {
-			chatArea.WriteString(fmt.Sprintf("[yellow]%s[/]\n\n", msg))
+			chatArea.WriteString(errorStyle.Render(msg) + "\n\n")
 		}
 	}
 	if m.activeJobId != "" {
-		chatArea.WriteString("[yellow]Anti is thinking...[/]\n")
+		chatArea.WriteString(lipgloss.NewStyle().Foreground(yellow).Render("Anti is thinking... 💭") + "\n")
 	}
 
 	content := mainContentStyle.Render(chatArea.String())
