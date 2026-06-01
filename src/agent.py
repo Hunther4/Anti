@@ -6,6 +6,12 @@ import logging
 import subprocess
 import shutil
 import time
+from rich.console import Console
+from rich.panel import Panel
+from rich.live import Live
+from rich.status import Status
+
+from src.logger import AppLogger, Colors
 
 from src.logger import AppLogger, Colors
 
@@ -37,6 +43,7 @@ class AntiAgent:
 
     def __init__(self):
         self.base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.console = Console()
 
         self.config_path = os.path.join(self.base_dir, "config.json")
         self.config = self._load_config()
@@ -228,87 +235,95 @@ class AntiAgent:
     def _display_banner(self, is_local: bool):
         """Renderiza el banner ASCII y las tarjetas de diagnóstico de inicio."""
         # 1. ASCII Banner
-        print(f"\n{Colors.CYAN}{Colors.BOLD}")
-        print("     _   ___  __  __  ___  ")
-        print("    /_\\ / _ \\|  \\/  |/ _ \\ ")
-        print("   / _ \\ (_) | |\\/| | (_) |")
-        print("  /_/ \\_\\___/|_|  |_|___/ ")
-        print(f"{Colors.END}{Colors.WHITE}  v1.6 Quantum{Colors.END}")
-        print(f"{Colors.CYAN}{'─' * 40}{Colors.END}\n")
-
+        self.console.print(f"\n{Colors.CYAN}{Colors.BOLD}")
+        self.console.print("     _   ___  __  __  ___  ")
+        self.console.print("    /_\\ / _ \\|  \\/  |/ _ \\ ")
+        self.console.print("   / _ \\ (_) | \\/| | (_) |")
+        self.console.print("  /_/ \\_\\___/|_|  |_|___/ ")
+        self.console.print(f"{Colors.END}{Colors.WHITE}  v1.6 Quantum{Colors.END}")
+        self.console.print(f"{Colors.CYAN}{'─' * 40}{Colors.END}\n")
+        
         # 2. Tarjetas de diagnóstico
         provider_label = self.config.get("provider", "auto").upper()
         model_label = self.config.get("model") or "Auto-detectado"
-
         db_path = os.path.join(self.base_dir, "memory/cold_archive.db")
         try:
             db_size_kb = int(os.path.getsize(db_path) / 1024) if os.path.exists(db_path) else 0
-        except (OSError, FileNotFoundError, IsADirectoryError) as e:
-            app_logger.debug(f"Error getting db size: {e}")
+        except Exception:
             db_size_kb = 0
-
-        plugins_count = (
-            len(self.plugin_manager.tools)
-            if hasattr(self, "plugin_manager") and self.plugin_manager
-            else 5
+        
+        plugins_count = len(self.plugin_manager.tools) if hasattr(self, "plugin_manager") else 5
+        prm_status = "[green]ACTIVADO 🟢[/]" if self.config.get("enable_prm_scorer", True) else "[red]DESACTIVADO 🔴[/]"
+        
+        diag_text = (
+            f"🤖 [bold]PROVEEDOR[/]: [cyan]{provider_label}[/] | [white]{model_label}[/]\n"
+            f"🧠 [bold]MEMORIA[/]:    SQLite ([white]{db_size_kb} KB[/])\n"
+            f"🔌 [bold]PLUGINS[/]:    [cyan]{plugins_count}[/] Herramientas Activas\n"
+            f"⚡ [bold]PRM SCORER[/]: {prm_status}"
         )
-        prm_status = "ACTIVADO 🟢" if self.config.get("enable_prm_scorer", True) else "DESACTIVADO 🔴"
-
-        print(f"  {Colors.BOLD}🤖 [PROVEEDOR]:{Colors.END} {Colors.CYAN}{provider_label}{Colors.END} | {Colors.WHITE}{model_label}{Colors.END}")
-        print(f"  {Colors.BOLD}🧠 [MEMORIA]:{Colors.END}    SQLite ({db_size_kb} KB)")
-        print(f"  {Colors.BOLD}🔌 [PLUGINS]:{Colors.END}    {plugins_count} Herramientas Activas")
-        print(f"  {Colors.BOLD}⚡ [PRM SCORER]:{Colors.END} {prm_status}")
-
+        
         if is_local:
-            print(f"  {Colors.BOLD}🔒 [CONTEXTO]:{Colors.END}   Local ({Colors.GREEN}Ventana 10 msg - Ultra Velocidad ⚡{Colors.END})")
+            diag_text += f"\n🔒 [bold]CONTEXTO[/]:   [green]Local (Ventana 10 msg - Ultra Velocidad ⚡)[/]"
         else:
-            print(f"  {Colors.BOLD}☁️ [CONTEXTO]:{Colors.END}   Nube ({Colors.BLUE}Ventana 100 msg - Memoria Profunda ☁️{Colors.END})")
-        print(f"\n{Colors.CYAN}{'─' * 40}{Colors.END}\n")
+            diag_text += f"\n☁️ [bold]CONTEXTO[/]:   [blue]Nube (Ventana 100 msg - Memoria Profunda ☁️)[/]"
+            
+        self.console.print(Panel(diag_text, border_style="blue", expand=False))
+        self.console.print(f"\n{Colors.CYAN}{'─' * 40}{Colors.END}\n")
 
     def _check_startup_connection(self):
         """Verifica la conexión con el proveedor al arrancar y avisa si falla."""
         try:
             if not asyncio.run(self.brain.check_connection()):
-                print(f"{Colors.YELLOW}[!] Advertencia: No se pudo conectar con el proveedor seleccionado.{Colors.END}")
-                print(f"{Colors.YELLOW}    Asegurate de que el servidor local o tu API key esten configurados.{Colors.END}\n")
+                self.console.print(f"[bold yellow][!] Advertencia: No se pudo conectar con el proveedor seleccionado.[/]")
+                self.console.print(f"[bold yellow]    Asegurate de que el servidor local o tu API key esten configurados.[/]\n")
         except Exception as e:
-            print(f"{Colors.RED}[!] Error crítico verificando conexión: {e}{Colors.END}")
+            self.console.print(f"[bold red][!] Error crítico verificando conexión: {e}[/]")
 
     def _input_loop(self, is_local: bool):
-        """Loop principal de input del CLI. Lee comandos y despacha al agente."""
-        if is_local:
-            prompt = f"{Colors.CYAN}{Colors.BOLD}[Local ⚡]{Colors.END} {Colors.GREEN}{Colors.BOLD}Anti@Local > {Colors.END}"
-        else:
-            prompt = f"{Colors.BLUE}{Colors.BOLD}[Cloud ☁️]{Colors.END} {Colors.GREEN}{Colors.BOLD}Anti@Cloud > {Colors.END}"
-
+        """Loop principal de input del CLI con interfaz enriquecida."""
+        prompt_text = "Anti@Local" if is_local else "Anti@Cloud"
+        prompt_color = "green" if is_local else "blue"
+        
+        self.console.print("\n[bold magenta]Bienvenido al núcleo de Anti-Agent. Escribe [bold cyan]'help'[ /bold cyan] para ver comandos.[/bold magenta]")
+        
         while self.is_running:
             try:
-                user_input = input(prompt).strip()
+                # Prompt estilizado
+                user_input = self.console.input(f"[{prompt_color} bold]❯ {prompt_text}[/]")
+                user_input = user_input.strip()
+                
                 if not user_input:
                     continue
-
+                
                 if user_input.lower() in ["exit", "quit"]:
                     self.is_running = False
-                    print(f"\n{Colors.BLUE}[*] Apagando sistemas... ¡Hasta pronto! 🚀{Colors.END}\n")
+                    self.console.print(f"\n[bold blue][*] Apagando sistemas... ¡Hasta pronto! 🚀[/]")
                     break
-
-                result = asyncio.run(self.handle_command(user_input))
+                
+                # Procesamiento con spinner de carga
+                with self.console.status(f"[bold yellow]Procesando...[/]", spinner="dots") as status:
+                    result = asyncio.run(self.handle_command(user_input))
+                
                 if result:
                     if isinstance(result, dict) and "response" in result:
-                        print(f"\n{self.render_markdown(result['response'])}\n")
+                        # Renderizar respuesta en un panel elegante
+                        formatted_response = self.render_markdown(result['response'])
+                        self.console.print(Panel(formatted_response, title="[bold cyan]Anti[/]", border_style="blue"))
                     else:
-                        print(f"\n{self.render_markdown(str(result))}\n")
+                        formatted_result = self.render_markdown(str(result))
+                        self.console.print(Panel(formatted_result, title="[bold cyan]Anti[/]", border_style="blue"))
+                        
             except KeyboardInterrupt:
-                print(f"\n{Colors.YELLOW}[!] Interrumpido por el usuario.{Colors.END}")
+                self.console.print(f"\n[bold yellow][!] Interrumpido por el usuario.[/]")
                 self.is_running = False
                 break
             except EOFError:
-                print(f"\n{Colors.YELLOW}[!] EOF recibido. Saliendo...{Colors.END}")
+                self.console.print(f"\n[bold yellow][!] EOF recibido. Saliendo...[/]")
                 self.is_running = False
                 break
             except Exception as e:
                 app_logger.exception(f"Error en CLI loop")
-                print(f"\n{Colors.RED}[!] Error: {e}{Colors.END}")
+                self.console.print(f"\n[bold red][!] Error: {e}[/]")
 
     # --- Command Handler ---
 
