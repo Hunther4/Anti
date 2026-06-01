@@ -19,7 +19,7 @@ class MemoryConsolidator:
         # print("[*] Iniciando consolidación autónoma de memoria...") # Basura removed
         
         # 1. Ejecutar Decay (Limpieza por rendimiento)
-        deleted_decay = self.memory.decay_old_engrams()
+        deleted_decay = await self.memory.decay_old_engrams()
         if deleted_decay > 0:
             logger.info(f"Decay: {deleted_decay} engrams eliminados.")
 

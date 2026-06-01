@@ -239,7 +239,7 @@ class AntiAgent:
         final_response, score, is_success, votes = await self._evaluate_response(final_response, user_text, tool_step, _depth=_depth)
 
         # 6. Update History & Stats
-        self._update_history(user_msg, final_response, is_success, score, votes)
+        await self._update_history(user_msg, final_response, is_success, score, votes)
 
         # Auto-maintenance
         self.task_counter += 1
@@ -247,7 +247,7 @@ class AntiAgent:
             await self._reflect()
             # Evict old engrams (decay-based)
             try:
-                evicted = self.memory.decay_old_engrams(max_fallos=3)
+                evicted = await self.memory.decay_old_engrams(max_fallos=3)
                 if evicted > 0:
                     logger.info(f"[Memory] Auto-evicted {evicted} stale engrams")
             except Exception as e:
@@ -264,12 +264,12 @@ class AntiAgent:
             "score": score
         }
 
-    def _update_history(self, user_msg, final_response, is_success, score=None, votes=None):
+    async def _update_history(self, user_msg, final_response, is_success, score=None, votes=None):
         self.history.append({"role": "user", "content": user_msg})
         self.history.append({"role": "assistant", "content": final_response})
         if len(self.history) > 20:
             self.history = self.history[-20:]
-        self.memory.log_experience(user_msg, final_response, is_success, score, votes)
+        await self.memory.log_experience(user_msg, final_response, is_success, score, votes)
 
     async def _evaluate_response(self, response, user_text, tool_step, _depth=0):
         """Evaluates response quality using PRM Scorer and optionally refines."""
