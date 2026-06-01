@@ -24,9 +24,9 @@ from .ollama import OllamaProvider
 
 
 # Aliases convenientes
-def auto_create(base_url: str = None, **kwargs):
-    """Crea un proveedor auto-detectado."""
-    return ProviderFactory.auto_create(base_url=base_url, **kwargs)
+async def auto_create(base_url: str = None, **kwargs):
+    """Crea un proveedor auto-detectado (async)."""
+    return await ProviderFactory.auto_create(base_url=base_url, **kwargs)
 
 
 def create_provider(provider: str, **kwargs):

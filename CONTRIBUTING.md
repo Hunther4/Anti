@@ -46,8 +46,14 @@ Anti/
 │   └── plugins/          # Plugins dinámicos registrados con @anti_tool
 │       ├── core_tools.py # SEARCH, RUN, WRITE, READ, FETCH, RESEARCH
 │       ├── web_reader.py # WEB_READ — scraper web a Markdown
+│       ├── memory_core.py # Memory tools — CRUD de engrams
 │       ├── ast_security_auditor.py # AST_AUDIT — auditoría de seguridad
 │       └── github_diff_auditor.py # DIFF_AUDIT — auditoría de PRs
+├── tools/                # Implementaciones base de herramientas
+│   ├── search.py         # Lógica de búsqueda + WigoloCache
+│   ├── browser.py        # Fetch web + Playwright
+│   ├── filesystem.py     # Operaciones de archivos
+│   └── network.py        # Validación de URLs y seguridad
 ├── memory/               # Datos persistentes del agente
 │   ├── cold_archive.db   # SQLite FTS5 — archivo frío de engrams
 │   ├── engrams/          # Engrams en JSON (hot path)
@@ -173,6 +179,7 @@ No incluyas atribuciones de IA (Co-Authored-By) en los commits.
 - Registrá herramientas con el decorador `@anti_tool(name, description)`.
 - La función puede ser síncrona o asíncrona (el `PluginManager` maneja ambos casos).
 - La description debe ser clara para que el LLM entienda cuándo usarla.
+- Las implementaciones base están en `src/tools/` (paquete modular).
 
 ---
 

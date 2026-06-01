@@ -7,7 +7,7 @@ import asyncio
 import json
 import logging
 import re
-import requests
+import httpx
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -146,18 +146,14 @@ class PRMScorer:
                 "temperature": self.temperature,
                 "max_tokens": self.max_new_tokens,
             }
-            # Use run_in_executor to make requests.post non-blocking for the event loop
-            loop = asyncio.get_running_loop()
-            response = await loop.run_in_executor(
-                None, 
-                lambda: requests.post(self.prm_url, json=payload, timeout=120)
-            )
+            async with httpx.AsyncClient(timeout=120) as client:
+                response = await client.post(self.prm_url, json=payload)
             response.raise_for_status()
             choices = response.json().get('choices', [])
             if not choices:
                 raise ValueError("No choices in response")
             content = choices[0].get('message', {}).get('content', '')
             return _parse_prm_score(content), content
-        except (requests.RequestException, KeyError, IndexError, json.JSONDecodeError, ValueError) as e:
+        except (httpx.HTTPError, KeyError, IndexError, json.JSONDecodeError, ValueError) as e:
             logger.warning("[PRMScorer] query failed (vote %d): %s", vote_id, e)
             return None, ""
