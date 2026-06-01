@@ -26,6 +26,7 @@ const (
 	ScreenModel
 	ScreenSetup
 	ScreenAPIInput
+	ScreenChat
 )
 
 // Colors & Design tokens
@@ -49,11 +50,7 @@ var (
 			MarginLeft(2).
 			MarginBottom(1)
 
-	boxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(purple).
-			Padding(1, 2).
-			MarginBottom(1)
+	// boxStyle reserved for future modal dialogs
 
 	selectedItemStyle = lipgloss.NewStyle().
 				Foreground(cyan).
@@ -66,7 +63,7 @@ var (
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(purple).
 			Padding(1, 2).
-			Width(38)
+			Width(40)
 
 	mainContentStyle = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
@@ -96,10 +93,14 @@ type Config struct {
 }
 
 type ModelStatus struct {
-	LMStudioOnline bool
-	OllamaOnline   bool
-	WorkspaceFiles int
-	EngramsCount   int
+	LMStudioOnline   bool
+	OllamaOnline     bool
+	WorkspaceFiles   int
+	EngramsCount     int
+	SandboxOnline    bool
+	SandboxMemUsedMB int64
+	SandboxMemLimMB  int64
+	BootEngrams      int
 }
 
 type model struct {
@@ -110,12 +111,89 @@ type model struct {
 	screen       Screen
 	selectedAPI  string
 	apiInput     textinput.Model
+	chatInput    textinput.Model
+	chatHistory  []string
+	activeJobId  string
 	err          error
 	quitting     bool
 	pythonPath   string
 }
 
 type processFinishedMsg struct{}
+type sandboxResetMsg struct {
+	err error
+}
+type sandboxStatsMsg struct {
+	usedMB int64
+	limMB  int64
+	online bool
+}
+
+func tickSandboxStats() tea.Cmd {
+	return tea.Tick(5*time.Second, func(_ time.Time) tea.Msg {
+		used, lim, ok := GetSandboxMemoryMB()
+		return sandboxStatsMsg{usedMB: used, limMB: lim, online: ok}
+	})
+}
+
+func (m *model) sendChatMessage(msg string) tea.Cmd {
+	return func() tea.Msg {
+		url := "http://localhost:8000/api/chat"
+		payload := map[string]string{"message": msg}
+		body, _ := json.Marshal(payload)
+
+		resp, err := http.Post(url, "application/json", strings.NewReader(string(body)))
+		if err != nil {
+			return chatErrorMsg{err: err}
+		}
+		defer resp.Body.Close()
+
+		var res map[string]string
+		if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+			return chatErrorMsg{err: err}
+		}
+		return chatJobIdMsg{jobId: res["job_id"]}
+	}
+}
+
+func (m *model) pollJobStatus(jobId string) tea.Cmd {
+	return func() tea.Msg {
+		url := fmt.Sprintf("http://localhost:8000/api/job/%s", jobId)
+		resp, err := http.Get(url)
+		if err != nil {
+			return chatErrorMsg{err: err}
+		}
+		defer resp.Body.Close()
+
+		var res map[string]interface{}
+		if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+			return chatErrorMsg{err: err}
+		}
+
+		status := res["status"].(string)
+		if status == "completed" {
+			result := res["result"].(map[string]interface{})
+			return chatResponseMsg{response: result["response"].(string)}
+		} else if status == "failed" {
+			return chatErrorMsg{err: fmt.Errorf("job failed: %v", res["error"])}
+		}
+
+		return pollContinueMsg{}
+	}
+}
+
+type chatJobIdMsg struct{ jobId string }
+type chatResponseMsg struct{ response string }
+type chatErrorMsg struct{ err error }
+type pollContinueMsg struct{}
+
+
+func doResetSandbox(cwd string) tea.Cmd {
+	return func() tea.Msg {
+		err := ResetSandbox(cwd)
+		return sandboxResetMsg{err: err}
+	}
+}
 
 func initialModel() model {
 	ti := textinput.New()
@@ -123,6 +201,10 @@ func initialModel() model {
 	ti.Focus()
 	ti.CharLimit = 150
 	ti.Width = 35
+
+	ci := textinput.New()
+	ci.Placeholder = "Escribe un mensaje para Anti..."
+	ci.Focus()
 
 	// Determine correct python command inside venv
 	pythonPath := "./venv/bin/python"
@@ -137,10 +219,12 @@ func initialModel() model {
 			"🔌  Conexiones API (Gestionar Claves)",
 			"🤖  Elegir Modelo (Seleccionar IA)",
 			"⚙️  Instalación & Setup (Diagnóstico)",
+			"🐳  Reiniciar Sandbox (Docker)",
 			"🚪  Salir",
 		},
 		screen:     ScreenMain,
 		apiInput:   ti,
+		chatInput:  ci,
 		pythonPath: pythonPath,
 	}
 
@@ -192,6 +276,16 @@ func (m *model) checkStatus() {
 		m.status.EngramsCount = int(fi.Size() / 1024) // size in KB as simple indicator
 	}
 
+	// Read cached boot_payload to get active engrams count
+	if data, err := os.ReadFile("memory/boot_payload.json"); err == nil {
+		var bp struct {
+			BootEngramsCount int `json:"boot_engrams_count"`
+		}
+		if json.Unmarshal(data, &bp) == nil {
+			m.status.BootEngrams = bp.BootEngramsCount
+		}
+	}
+
 	// 3. Ping local providers in background or quickly with healthy timeout
 	client := http.Client{Timeout: 750 * time.Millisecond}
 	
@@ -218,16 +312,56 @@ func (m *model) checkStatus() {
 	} else {
 		m.status.OllamaOnline = false
 	}
+
+	// 4. Check Sandbox state
+	sandboxCheckCmd := exec.Command("docker", "inspect", "-f", "{{.State.Running}}", "anti-sandbox")
+	if out, err := sandboxCheckCmd.Output(); err == nil {
+		m.status.SandboxOnline = strings.TrimSpace(string(out)) == "true"
+	} else {
+		m.status.SandboxOnline = false
+	}
 }
 
 func (m model) Init() tea.Cmd {
-	return textinput.Blink
+	return tea.Batch(
+		textinput.Blink,
+		tickSandboxStats(),
+	)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
+	case sandboxStatsMsg:
+		m.status.SandboxOnline = msg.online
+		m.status.SandboxMemUsedMB = msg.usedMB
+		m.status.SandboxMemLimMB = msg.limMB
+		return m, tickSandboxStats()
+	case chatJobIdMsg:
+		m.activeJobId = msg.jobId
+		return m, m.pollJobStatus(msg.jobId)
+	case chatResponseMsg:
+		m.chatHistory = append(m.chatHistory, "Anti: "+msg.response)
+		m.activeJobId = ""
+		return m, nil
+	case chatErrorMsg:
+		m.chatHistory = append(m.chatHistory, "Error: "+msg.err.Error())
+		m.activeJobId = ""
+		return m, nil
+	case pollContinueMsg:
+		if m.activeJobId != "" {
+			return m, m.pollJobStatus(m.activeJobId)
+		}
+		return m, nil
+	case sandboxResetMsg:
+		m.checkStatus()
+		if msg.err != nil {
+			m.err = msg.err
+		} else {
+			m.err = nil
+		}
+		return m, nil
 	case processFinishedMsg:
 		m.checkStatus()
 		return m, nil
@@ -237,6 +371,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.screen != ScreenMain {
 				m.screen = ScreenMain
 				m.apiInput.Reset()
+				m.chatInput.Reset()
 				m.checkStatus()
 				return m, nil
 			}
@@ -258,6 +393,224 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.cursor = 0
 				}
+			case "enter":
+				choice := m.choices[m.cursor]
+				if strings.Contains(choice, "Terminal") {
+					m.screen = ScreenChat
+					m.chatInput.Focus()
+					return m, func() tea.Msg {
+						cmd := exec.Command("python3", "server.py")
+						cmd.Start()
+						return processFinishedMsg{}
+					}
+				} else if strings.Contains(choice, "API") {
+					m.screen = ScreenAPIInput
+					m.apiInput.Focus()
+					return m, nil
+				} else if strings.Contains(choice, "Modelo") {
+					m.screen = ScreenModel
+					return m, nil
+				} else if strings.Contains(choice, "Instalación") {
+					m.screen = ScreenSetup
+					return m, nil
+				} else if strings.Contains(choice, "Sandbox") {
+					return m, doResetSandbox(".")
+				} else if strings.Contains(choice, "Salir") {
+					m.quitting = true
+					return m, tea.Quit
+				}
+			}
+		} else if m.screen == ScreenChat {
+			switch msg.Type {
+			case tea.KeyEnter:
+				input := m.chatInput.Value()
+				if input == "" {
+					return m, nil
+				}
+				m.chatHistory = append(m.chatHistory, "User: "+input)
+				m.chatInput.SetValue("")
+				m.activeJobId = ""
+				return m, m.sendChatMessage(input)
+			}
+			return m, m.chatInput.Update(msg)
+		} else if m.screen == ScreenKeys {
+			switch msg.String() {
+			case "1":
+				m.selectedAPI = "openai"
+				m.apiInput.SetValue(m.config.OpenAIAPIKey)
+				m.screen = ScreenAPIInput
+			case "2":
+				m.selectedAPI = "deepseek"
+				m.apiInput.SetValue(m.config.DeepSeekAPIKey)
+				m.screen = ScreenAPIInput
+			case "3":
+				m.selectedAPI = "gemini"
+				m.apiInput.SetValue(m.config.GeminiAPIKey)
+				m.screen = ScreenAPIInput
+			case "4":
+				m.selectedAPI = "anthropic"
+				m.apiInput.SetValue(m.config.AnthropicAPIKey)
+				m.screen = ScreenAPIInput
+			case "5":
+				m.selectedAPI = "minimax"
+				m.apiInput.SetValue(m.config.MinimaxAPIKey)
+				m.screen = ScreenAPIInput
+			case "6":
+				m.selectedAPI = "openaicompatible"
+				m.apiInput.SetValue(m.config.OpenAICompatibleAPIKey)
+				m.screen = ScreenAPIInput
+			case "0", "b", "esc":
+				m.screen = ScreenMain
+				m.checkStatus()
+			}
+		} else if m.screen == ScreenModel {
+			switch msg.String() {
+			case "1":
+				m.config.Provider = "auto"
+				m.saveConfig()
+				m.screen = ScreenMain
+			case "2":
+				m.config.Provider = "lmstudio"
+				m.config.Model = "Auto-detectado por LM Studio"
+				m.saveConfig()
+				m.screen = ScreenMain
+			case "3":
+				m.config.Provider = "ollama"
+				m.config.Model = "Auto-detectado por Ollama"
+				m.saveConfig()
+				m.screen = ScreenMain
+			case "4":
+				m.config.Provider = "openai"
+				m.config.Model = "gpt-4o"
+				m.saveConfig()
+				m.screen = ScreenMain
+			case "5":
+				m.config.Provider = "gemini"
+				m.config.Model = "gemini-2.5-flash"
+				m.saveConfig()
+				m.screen = ScreenMain
+			case "6":
+				m.config.Provider = "deepseek"
+				m.config.Model = "deepseek-chat"
+				m.saveConfig()
+				m.screen = ScreenMain
+			case "7":
+				m.config.Provider = "anthropic"
+				m.config.Model = "claude-3-5-sonnet-20241022"
+				m.saveConfig()
+				m.screen = ScreenMain
+			}
+		}
+	}
+
+	return m, cmd
+}
+		return m, nil
+	case sandboxResetMsg:
+		m.checkStatus()
+		if msg.err != nil {
+			m.err = msg.err
+		} else {
+			m.err = nil
+		}
+		return m, nil
+	case processFinishedMsg:
+		m.checkStatus()
+		return m, nil
+	case tea.KeyMsg:
+		switch msg.Type {
+		case tea.KeyCtrlC, tea.KeyEsc:
+			if m.screen != ScreenMain {
+				m.screen = ScreenMain
+				m.apiInput.Reset()
+				m.chatInput.Reset()
+				m.checkStatus()
+				return m, nil
+			}
+			m.quitting = true
+			return m, tea.Quit
+		}
+
+		if m.screen == ScreenMain {
+			switch msg.String() {
+			case "up", "k":
+				if m.cursor > 0 {
+					m.cursor--
+				} else {
+					m.cursor = len(m.choices) - 1
+				}
+			case "down", "j":
+				if m.cursor < len(m.choices)-1 {
+					m.cursor++
+				} else {
+					m.cursor = 0
+				}
+			case "enter":
+				choice := m.choices[m.cursor]
+				if strings.Contains(choice, "Terminal") {
+					// Start server and go to chat
+					m.screen = ScreenChat
+					m.chatInput.Focus()
+					return m, func() tea.Msg {
+						cmd := exec.Command("python3", "server.py")
+						cmd.Start()
+						return processFinishedMsg{}
+					}
+				} else if strings.Contains(choice, "API") {
+					m.screen = ScreenAPIInput
+					m.apiInput.Focus()
+					return m, nil
+				} else if strings.Contains(choice, "Modelo") {
+					m.screen = ScreenModel
+					return m, nil
+				} else if strings.Contains(choice, "Instalación") {
+					m.screen = ScreenSetup
+					return m, nil
+				} else if strings.Contains(choice, "Sandbox") {
+					return m, doResetSandbox(".")
+				} else if strings.Contains(choice, "Salir") {
+					m.quitting = true
+					return m, tea.Quit
+				}
+			}
+		} else if m.screen == ScreenChat {
+			switch msg.Type {
+			case tea.KeyEnter:
+				input := m.chatInput.Value()
+				if input == "" {
+					return m, nil
+				}
+				m.chatHistory = append(m.chatHistory, "User: "+input)
+				m.chatInput.SetValue("")
+				m.activeJobId = ""
+				return m, m.sendChatMessage(input)
+			}
+			return m, m.chatInput.Update(msg)
+		}
+			m.quitting = true
+			return m, tea.Quit
+		}
+
+		if m.screen == ScreenMain {
+			switch msg.String() {
+			case "up", "k":
+				if m.cursor > 0 {
+					m.cursor--
+				} else {
+					m.cursor = len(m.choices) - 1
+				}
+			case "down", "j":
+				if m.cursor < len(m.choices)-1 {
+					m.cursor++
+				} else {
+					m.cursor = 0
+				}
+			case "r":
+				cwd, _ := os.Getwd()
+				_ = ResetSandbox(cwd)
+				m.checkStatus()
+			case "p":
+				_ = os.Remove("memory/logs.jsonl")
 			case "enter":
 				return m.handleMainMenuSelection()
 			}
@@ -418,7 +771,10 @@ func (m model) handleMainMenuSelection() (tea.Model, tea.Cmd) {
 		m.screen = ScreenModel
 	case 4: // Setup / Diagnostics
 		m.screen = ScreenSetup
-	case 5: // Exit
+	case 5: // Docker Sandbox Reset
+		cwd, _ := os.Getwd()
+		return m, doResetSandbox(cwd)
+	case 6: // Exit
 		m.quitting = true
 		return m, tea.Quit
 	}
@@ -432,14 +788,47 @@ func banner() string {
 	sb.WriteString(" ██   ██ ████   ██    ██    ██\n")
 	sb.WriteString(" ███████ ██ ██  ██    ██    ██\n")
 	sb.WriteString(" ██   ██ ██  ██ ██    ██    ██\n")
-	sb.WriteString(" ██   ██ ██   ████    ██    ██  v3.0 Cosmic Overhaul\n")
+	sb.WriteString(" ██   ██ ██   ████    ██    ██\n")
+	sb.WriteString(" ─────────────────────────── v1.6\n")
 	return sb.String()
 }
 
 func (m model) View() string {
-	if m.quitting {
-		return lipgloss.NewStyle().Foreground(magenta).Bold(true).Render("\n  ¡Hasta pronto, Analista Supremo! 🚀 Anti-Agent fuera.\n\n")
+	if m.screen == ScreenMain {
+		return m.viewMain()
+	} else if m.screen == ScreenChat {
+		return m.viewChat()
+	} else if m.screen == ScreenAPIInput {
+		return m.viewAPIInput()
+	} else if m.screen == ScreenModel {
+		return m.viewModel()
+	} else if m.screen == ScreenSetup {
+		return m.viewSetup()
 	}
+	return "Error: Unknown Screen"
+}
+
+func (m model) viewChat() string {
+	var chatArea strings.Builder
+	for _, msg := range m.chatHistory {
+		if strings.HasPrefix(msg, "User: ") {
+			chatArea.WriteString(fmt.Sprintf("[cyan]User:[/]\n%s\n\n", msg[6:]))
+		} else if strings.HasPrefix(msg, "Anti: ") {
+			chatArea.WriteString(fmt.Sprintf("[magenta]Anti:[/]\n%s\n\n", msg[6:]))
+		} else {
+			chatArea.WriteString(fmt.Sprintf("[yellow]%s[/]\n\n", msg))
+		}
+	}
+	if m.activeJobId != "" {
+		chatArea.WriteString("[yellow]Anti is thinking...[/]\n")
+	}
+
+	content := mainContentStyle.Render(chatArea.String())
+	input := m.chatInput.View()
+	
+	header := titleStyle.Render("ANTI CHAT")
+	return fmt.Sprintf("%s\n%s\n\n%s", header, content, input)
+}
 
 	var mainPanel string
 	var sidebarPanel string
@@ -584,8 +973,50 @@ func (m model) View() string {
 
 	// 3. STATS
 	sb.WriteString(fmt.Sprintf("%s: %s\n", lipgloss.NewStyle().Foreground(gray).Render("Workspace Files"), lipgloss.NewStyle().Foreground(white).Render(fmt.Sprintf("%d", m.status.WorkspaceFiles))))
-	sb.WriteString(fmt.Sprintf("%s: %s\n", lipgloss.NewStyle().Foreground(gray).Render("Base de Conocimiento"), lipgloss.NewStyle().Foreground(white).Render(fmt.Sprintf("%d KB", m.status.EngramsCount))))
-	
+	sb.WriteString(fmt.Sprintf("%s: %s\n\n", lipgloss.NewStyle().Foreground(gray).Render("Base de Conocimiento"), lipgloss.NewStyle().Foreground(white).Render(fmt.Sprintf("%d KB", m.status.EngramsCount))))
+
+	// 4. SANDBOX TELEMETRY PANEL
+	sb.WriteString(lipgloss.NewStyle().Foreground(purple).Bold(true).Render("🐳 SANDBOX") + "\n")
+	sandboxBadge := lipgloss.NewStyle().Foreground(magenta).Bold(true).Render("[OFFLINE]")
+	if m.status.SandboxOnline {
+		sandboxBadge = lipgloss.NewStyle().Foreground(lipgloss.Color("#00ff00")).Bold(true).Render("[ONLINE]")
+	}
+	sb.WriteString(fmt.Sprintf("%s %s\n", lipgloss.NewStyle().Foreground(gray).Render("Estado:"), sandboxBadge))
+
+	if m.status.SandboxOnline {
+		usedMB := m.status.SandboxMemUsedMB
+		limMB := m.status.SandboxMemLimMB
+		if limMB == 0 {
+			limMB = 2048
+		}
+		pct := float64(usedMB) / float64(limMB)
+		if pct > 1 {
+			pct = 1
+		}
+		barWidth := 26
+		filled := int(pct * float64(barWidth))
+		bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
+		barColor := lipgloss.Color("#00ff00")
+		if pct > 0.75 {
+			barColor = lipgloss.Color("#ff9900")
+		}
+		if pct > 0.9 {
+			barColor = lipgloss.Color("#ff003c")
+		}
+		sb.WriteString(lipgloss.NewStyle().Foreground(gray).Render("RAM:") + "\n")
+		sb.WriteString(lipgloss.NewStyle().Foreground(barColor).Render(bar) + "\n")
+		sb.WriteString(lipgloss.NewStyle().Foreground(darkGray).Render(fmt.Sprintf("%dMB / %dMB (%.0f%%)", usedMB, limMB, pct*100)) + "\n")
+	}
+
+	engramCount := m.status.BootEngrams
+	engramStr := fmt.Sprintf("🧠 Memoria Core: %d Engrams Activos", engramCount)
+	engramStyle := lipgloss.NewStyle().Foreground(cyan).Bold(true)
+	if engramCount == 0 {
+		engramStyle = lipgloss.NewStyle().Foreground(darkGray)
+		engramStr = "🧠 Memoria Core: Sin cargar"
+	}
+	sb.WriteString("\n" + engramStyle.Render(engramStr) + "\n")
+
 	sidebarPanel = sidebarStyle.Render(sb.String())
 
 	// Build Main Panel based on current screen
@@ -606,7 +1037,9 @@ func (m model) View() string {
 			mainSB.WriteString(fmt.Sprintf("%s%s\n", cursorSymbol, item))
 		}
 		
-		mainSB.WriteString("\n" + lipgloss.NewStyle().Foreground(darkGray).Render("Navegá usando ↑/↓ o j/k • Enter para seleccionar"))
+		mainSB.WriteString("\n" + lipgloss.NewStyle().Foreground(darkGray).Render("↑/↓ j/k navegar • Enter seleccionar"))
+		mainSB.WriteString("\n" + lipgloss.NewStyle().Foreground(darkGray).Render("───────────────────────────────"))
+		mainSB.WriteString("\n" + lipgloss.NewStyle().Foreground(darkGray).Render("[r] Sandbox  [p] Purgar Logs"))
 		mainPanel = mainContentStyle.Render(mainSB.String())
 
 	case ScreenKeys:
@@ -692,7 +1125,7 @@ func (m model) View() string {
 	}
 
 	// Join banner + panels
-	appHeader := titleStyle.Render(banner()) + subtitleStyle.Render("Analista Supremo de Seguridad, Auditoría y Automatización DevOps") + "\n"
+	appHeader := titleStyle.Render(banner()) + "\n"
 	appPanels := lipgloss.JoinHorizontal(lipgloss.Top, sidebarPanel, "   ", mainPanel)
 
 	return appHeader + "\n" + appPanels + "\n\n"
@@ -703,6 +1136,57 @@ func main() {
 	if exePath, err := os.Executable(); err == nil {
 		appDir := filepath.Dir(exePath)
 		_ = os.Chdir(appDir)
+	}
+
+	// Interceptar argumentos del CLI de memoria
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "--mem-init":
+			if err := RunMemBoot(); err != nil {
+				fmt.Printf("{\"status\": \"error\", \"message\": \"%v\"}\n", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		case "--mem-search":
+			if len(os.Args) < 3 {
+				fmt.Println("[]")
+				os.Exit(1)
+			}
+			if err := RunMemSearch(os.Args[2]); err != nil {
+				fmt.Printf("{\"status\": \"error\", \"message\": \"%v\"}\n", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		case "--mem-get":
+			if len(os.Args) < 3 {
+				fmt.Println("{\"status\": \"error\", \"message\": \"Falta id de engram\"}")
+				os.Exit(1)
+			}
+			if err := RunMemGet(os.Args[2]); err != nil {
+				fmt.Printf("{\"status\": \"error\", \"message\": \"%v\"}\n", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		case "--mem-distill":
+			if err := RunMemDistill(); err != nil {
+				fmt.Printf("{\"status\": \"error\", \"message\": \"%v\"}\n", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		case "--mem-reinforce":
+			if len(os.Args) < 3 {
+				fmt.Println("{\"status\": \"error\", \"message\": \"Falta id de engram\"}")
+				os.Exit(1)
+			}
+			if err := RunMemReinforce(os.Args[2]); err != nil {
+				fmt.Printf("{\"status\": \"error\", \"message\": \"%v\"}\n", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		default:
+			fmt.Printf("Comando desconocido: %s\nUsar: --mem-init, --mem-search, --mem-get, --mem-distill, --mem-reinforce\n", os.Args[1])
+			os.Exit(1)
+		}
 	}
 
 	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
