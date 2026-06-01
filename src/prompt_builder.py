@@ -37,6 +37,9 @@ def build_agent_prompt(
             for search_dir in [lectura_dir, workspace_dir]:
                 doc_path = os.path.join(search_dir, os.path.basename(mention))
                 if os.path.exists(doc_path):
+                    if os.path.getsize(doc_path) > 100_000:  # 100KB limit
+                        loaded_docs.append(f"[Error: {mention} exceeds 100KB size limit]")
+                        break
                     try:
                         with open(doc_path, "r", encoding="utf-8") as f:
                             content = f.read()

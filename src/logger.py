@@ -87,6 +87,8 @@ class JsonFileHandler(logging.Handler):
     def __init__(self, filepath: str):
         super().__init__()
         self.filepath = filepath
+        self._buffer = []
+        self._buffer_size = 0
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
 
     def emit(self, record):
@@ -97,7 +99,6 @@ class JsonFileHandler(logging.Handler):
                 "module": record.name,
                 "message": record.getMessage(),
             }
-            # Include correlation ID if set
             rid = request_id_var.get('')
             if rid:
                 log_entry["request_id"] = rid
@@ -106,10 +107,26 @@ class JsonFileHandler(logging.Handler):
                 log_entry["exception"] = "".join(
                     traceback.format_exception(*record.exc_info)
                 ).strip()
-            with open(self.filepath, "a", encoding="utf-8") as f:
-                f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+            line = json.dumps(log_entry, ensure_ascii=False) + "\n"
+            self._buffer.append(line)
+            self._buffer_size += len(line)
+            if self._buffer_size >= 8192:
+                self._flush()
         except Exception:
             self.handleError(record)
+
+    def _flush(self):
+        if self._buffer:
+            try:
+                with open(self.filepath, "a", encoding="utf-8") as f:
+                    f.writelines(self._buffer)
+            except Exception:
+                pass
+            self._buffer.clear()
+            self._buffer_size = 0
+
+    def flush(self):
+        self._flush()
 
 
 class AppLogger:

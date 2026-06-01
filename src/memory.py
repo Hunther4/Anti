@@ -7,7 +7,7 @@ import concurrent.futures
 from datetime import datetime
 
 from src.logger import AppLogger
-from src.exceptions import MemoryError
+from src.exceptions import MemoryStorageError
 
 logger = logging.getLogger(__name__)
 app_logger = AppLogger(__name__)
@@ -115,6 +115,8 @@ class TFIDFContextRanker:
         ranked_docs.sort(key=lambda x: x["semantic_score"], reverse=True)
         return ranked_docs[:top_k]
 
+_default_ranker = TFIDFContextRanker()
+
 class MemoryManager:
     # Default: keep max 5000 log lines (rotate older)
     MAX_LOG_LINES = 5000
@@ -155,30 +157,28 @@ class MemoryManager:
             try:
                 return future.result(timeout=30)
             except concurrent.futures.TimeoutError:
+                future.cancel()
                 app_logger.warning("[Memory] _run_async timed out after 30s")
                 return None
             except Exception as e:
                 app_logger.error(f"[Memory] _run_async failed: {e}")
                 return None
 
-        # Case 2: No loop stored or loop not running — try get_event_loop
+        # Case 2: No loop stored — try get_running_loop, then create new one
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # We're in a thread with a running loop — use run_coroutine_threadsafe
-                future = asyncio.run_coroutine_threadsafe(coro, loop)
-                try:
-                    return future.result(timeout=30)
-                except concurrent.futures.TimeoutError:
-                    app_logger.warning("[Memory] _run_async timed out after 30s")
-                    return None
-                except Exception as e:
-                    app_logger.error(f"[Memory] _run_async failed: {e}")
-                    return None
-            else:
-                return loop.run_until_complete(coro)
+            loop = asyncio.get_running_loop()
+            future = asyncio.run_coroutine_threadsafe(coro, loop)
+            try:
+                return future.result(timeout=30)
+            except concurrent.futures.TimeoutError:
+                future.cancel()
+                app_logger.warning("[Memory] _run_async timed out after 30s")
+                return None
+            except Exception as e:
+                app_logger.error(f"[Memory] _run_async failed: {e}")
+                return None
         except RuntimeError:
-            # No event loop at all — create one temporarily
+            # No running loop — safe to create one
             return asyncio.run(coro)
 
     # --- Workspace helpers ---
@@ -213,14 +213,12 @@ class MemoryManager:
         # Rotate logs if exceeding limit
         if os.path.exists(self.logs_path):
             with open(self.logs_path, "r") as f:
-                line_count = sum(1 for _ in f)
-            if line_count >= self.MAX_LOG_LINES:
+                lines = f.readlines()
+            if len(lines) >= self.MAX_LOG_LINES:
                 # Keep last half when rotating
-                with open(self.logs_path, "r") as f:
-                    lines = f.readlines()
                 with open(self.logs_path, "w") as f:
-                    f.writelines(lines[line_count // 2:])
-                logger.info(f"[Memory] Rotated logs, kept {line_count // 2} entries")
+                    f.writelines(lines[len(lines) // 2:])
+                logger.info(f"[Memory] Rotated logs, kept {len(lines) // 2} entries")
         
         with open(self.logs_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
@@ -262,7 +260,7 @@ class MemoryManager:
         try:
             # Guardar en SQLite (Hot & Cold unificado)
             self._run_async(self.archive.archive_engram(topic, content))
-        except MemoryError as e:
+        except MemoryStorageError as e:
             app_logger.error(f"Failed to save engram '{topic}': {e}")
             return f"Error al guardar Engram '{topic}'."
         
@@ -441,42 +439,6 @@ class MemoryManager:
 
         return deleted_count
 
-    # Phase 2.3: Access Tracking
-    ACCESS_BONUS = 0.2
-
-    def _update_engram_access(self, filepath: str, data: dict) -> float:
-        """
-        Updates last_accessed_at, applies accessBonus, and recalculates full score.
-        Returns the new full score.
-        """
-        import json
-        from datetime import datetime
-        
-        now = datetime.now().isoformat()
-        
-        # Get current score (default to 1.0)
-        current_score = data.get("score", 1.0)
-        
-        # 3.2: Apply accessBonus (+0.2)
-        new_score = current_score + self.ACCESS_BONUS
-        
-        # 3.3: Recalculate full score (importance + all bonuses)
-        importance = data.get("importance_score", 0.5)
-        full_score = importance + new_score
-        
-        # Update in-memory data
-        data["last_accessed_at"] = now
-        data["score"] = new_score
-        
-        # Persist to file
-        try:
-            with open(filepath, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=4)
-        except Exception as e:
-            app_logger.exception(f"[Memory] Error updating engram access: {e}")
-        
-        return full_score
-
     def search_engrams(self, query):
         """
         Busca engrams usando el backend unificado FTS5 (SQLite) + TF-IDF semántico.
@@ -499,7 +461,7 @@ class MemoryManager:
                 "content": f"{c.get('topic', '')} {c.get('content', '')}"
             })
             
-        ranker = TFIDFContextRanker()
+        ranker = _default_ranker
         ranked = ranker.rank(query, docs, top_k=5)
         
         # 3. U-Shape Ordering del top 5
@@ -582,7 +544,7 @@ class MemoryManager:
                             pass
             
             if workspace_docs:
-                ranker = TFIDFContextRanker()
+                ranker = _default_ranker
                 ranked_workspace = ranker.rank(query, workspace_docs, top_k=3)
                 
                 md_output = []
@@ -683,7 +645,7 @@ class MemoryManager:
             entity_id = self._run_async(self.archive.add_entity(observation_id, entity_type, value.strip()))
             app_logger.info(f"[Memory] Entidad creada: {entity_type}={value[:50]} (id={entity_id})")
             return {"success": True, "entity_id": entity_id, "message": f"Entidad {entity_type} creada"}
-        except MemoryError:
+        except MemoryStorageError:
             raise
         except Exception as e:
             app_logger.exception(f"[Memory] Error create_entity: {e}")
@@ -711,7 +673,7 @@ class MemoryManager:
             edge_id = self._run_async(self.archive.add_edge(source_id, target_id, relation_type))
             app_logger.info(f"[Memory] Edge creado: {source_id} --[{relation_type}]--> {target_id} (id={edge_id})")
             return {"success": True, "edge_id": edge_id, "message": f"Edge {relation_type} creado"}
-        except MemoryError:
+        except MemoryStorageError:
             raise
         except Exception as e:
             app_logger.exception(f"[Memory] Error create_edge: {e}")

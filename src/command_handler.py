@@ -14,6 +14,11 @@ from src import metrics
 app_logger = AppLogger(__name__)
 
 
+def _sanitize_mcp_id(mcp_id: str) -> str:
+    """Sanitize MCP ID to safe directory name."""
+    return re.sub(r'[^a-zA-Z0-9_-]', '', mcp_id.lower()) or "unnamed-mcp"
+
+
 # --- Help & UI ---
 
 HELP_TEXT = """
@@ -213,7 +218,7 @@ def _mcp_list(memory):
 
 
 def _mcp_install(mcp_id, memory):
-    safe_id = re.sub(r'[^a-zA-Z0-9_-]', '', mcp_id.lower()) or "unnamed-mcp"
+    safe_id = _sanitize_mcp_id(mcp_id)
     skills_dir = memory.skills_dir
 
     existing_path = os.path.join(skills_dir, safe_id, "SKILL.md")
@@ -244,7 +249,7 @@ Contenido del MCP instalado. Editar este archivo para personalizar el comportami
 
 
 def _mcp_remove(mcp_id, memory):
-    safe_id = re.sub(r'[^a-zA-Z0-9_-]', '', mcp_id.lower()) or "unnamed-mcp"
+    safe_id = _sanitize_mcp_id(mcp_id)
     if not safe_id:
         return "[ERROR] Invalid MCP ID"
     skills_dir = memory.skills_dir
@@ -272,7 +277,7 @@ def _mcp_remove(mcp_id, memory):
 
 
 def _mcp_help(mcp_id, memory):
-    safe_id = re.sub(r'[^a-zA-Z0-9_-]', '-', mcp_id.lower())
+    safe_id = _sanitize_mcp_id(mcp_id)
     skills_dir = memory.skills_dir
     skill_path = os.path.join(skills_dir, safe_id, "SKILL.md")
 

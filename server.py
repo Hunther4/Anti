@@ -51,6 +51,7 @@ from src.tools import read_file
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 agent = None
+agent_lock = threading.Lock()
 active_jobs = {}
 active_jobs_lock = threading.Lock()
 
@@ -114,7 +115,8 @@ def background_agent_task(job_id, message, image_data):
     rid = _uuid.uuid4().hex[:12]
     set_request_id(rid)
     try:
-        response_obj = run_async(agent.handle_command(message, image_data=image_data))
+        with agent_lock:
+            response_obj = run_async(agent.handle_command(message, image_data=image_data))
         
         if response_obj is None:
             response_obj = {"response": "Comando ejecutado.", "steps": []}
@@ -335,23 +337,6 @@ class APIHandler(SimpleHTTPRequestHandler):
                     logging.exception("Failed to send metrics")
             return
 
-        elif path_base.startswith('/api/file/'):
-            raw = path_base.replace('/api/file/', '')
-            filename = os.path.basename(raw.split('/')[0])
-            if not filename or '..' in filename or '/' in filename or filename.startswith('.'):
-                self.send_error(400, "Invalid filename")
-                return
-            content = agent.memory.read_file(filename) if hasattr(agent.memory, 'read_file') else ""
-            
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            try:
-                self.wfile.write(json.dumps({"content": content}).encode('utf-8'))
-            except Exception:
-                logging.exception("Failed to send file content")
-            return
-
         return super().do_GET()
 
     used_nonces = {}
@@ -367,29 +352,34 @@ class APIHandler(SimpleHTTPRequestHandler):
         if not nonce or not signature:
             return False
             
-        with self.nonce_lock:
-            now = time.time()
-            stale = [n for n, ts in self.used_nonces.items() if now - ts > 300]
-            for n in stale:
-                del self.used_nonces[n]
-                
-            if nonce in self.used_nonces:
-                return False # Ataque de reproducción bloqueado
-                
         import hmac
         import hashlib
         payload_to_sign = nonce.encode('utf-8') + b"." + post_data
         expected_mac = hmac.new(SHARED_SECRET, payload_to_sign, hashlib.sha256).hexdigest()
         
-        if hmac.compare_digest(expected_mac, signature):
-            with self.nonce_lock:
-                self.used_nonces[nonce] = time.time()
-            return True
+        if not hmac.compare_digest(expected_mac, signature):
+            return False
             
-        return False
+        with self.nonce_lock:
+            now = time.time()
+            stale = [n for n, ts in self.used_nonces.items() if now - ts > 300]
+            for n in stale:
+                del self.used_nonces[n]
+            if nonce in self.used_nonces:
+                return False
+            self.used_nonces[nonce] = time.time()
+            
+        return True
 
     def do_POST(self):
         content_length = int(self.headers.get('Content-Length', 0))
+        MAX_BODY_SIZE = 10 * 1024 * 1024  # 10MB
+        if content_length > MAX_BODY_SIZE:
+            self.send_response(413)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "Request too large"}).encode('utf-8'))
+            return
         post_data = self.rfile.read(content_length)
 
         if not self._verify_signature(post_data):
@@ -435,7 +425,11 @@ def run_server(port=SERVER_PORT):
     httpd = ThreadingHTTPServer(('127.0.0.1', port), APIHandler)
     url = f"http://localhost:{port}"
     print(f"Anti Web UI: {url}")
-    webbrowser.open(url)  # Auto-abrir navegador
+    if not os.environ.get("ANTI_NO_BROWSER"):
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
 
     try:
         httpd.serve_forever()

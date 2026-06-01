@@ -30,10 +30,6 @@ class MemoryStorageError(AntiError):
     pass
 
 
-# Backward-compatible alias — prefer MemoryStorageError in new code
-MemoryError = MemoryStorageError
-
-
 class BrainConnectionError(AntiError):
     """
     Raised when there is a connection issue with the LLM server.
