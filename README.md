@@ -581,7 +581,7 @@ git push origin feat/my-feature
 
 ## License
 
-MIT © 2026 Anti-Agent developers.
+MIT © 2026 Anti-Agent developer.
 
 ---
 
