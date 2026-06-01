@@ -396,6 +396,190 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cursor = 0
 				}
 			case "enter":
+				choice := m.choices[m.// fix line 400-423 logic
+				choice := m.choices[m.cursor]
+				if strings.Contains(choice, "Terminal") {
+					m.screen = ScreenChat
+					m.chatInput.Focus()
+					return m, func() tea.Msg {
+						cmd := exec.Command("python3", "server.py")
+						cmd.Start()
+						return processFinishedMsg{}
+					}
+				} else if strings.Contains(choice, "API") {
+					m.screen = ScreenAPIInput
+					m.apiInput.Focus()
+					return m, nil
+				} else if strings.Contains(choice, "Modelo") {
+					m.screen = ScreenModel
+					return m, nil
+				} else if strings.Contains(choice, "Instalación") {
+					m.screen = ScreenSetup
+					return m, nil
+				} else if strings.Contains(choice, "Sandbox") {
+					return m, doResetSandbox(".")
+				} else if strings.Contains(choice, "Salir") {
+					m.quitting = true
+					return m, tea.Quit
+				}
+			}
+		} else if m.screen == ScreenChat {
+			switch msg.Type {
+			case tea.KeyEnter:
+				input := m.chatInput.Value()
+				if input == "" {
+					return m, nil
+				}
+				m.chatHistory = append(m.chatHistory, "User: "+input)
+				m.chatInput.SetValue("")
+				m.activeJobId = ""
+				return m, m.sendChatMessage(input)
+			}
+			return m, m.chatInput.Update(msg)
+		} else if m.screen == ScreenKeys {
+			switch msg.String() {
+			case "1":
+				m.selectedAPI = "openai"
+				m.apiInput.SetValue(m.config.OpenAIAPIKey)
+				m.screen = ScreenAPIInput
+			case "2":
+				m.selectedAPI = "deepseek"
+				m.apiInput.SetValue(m.config.DeepSeekAPIKey)
+				m.screen = ScreenAPIInput
+			case "3":
+				m.selectedAPI = "gemini"
+				m.apiInput.SetValue(m.config.GeminiAPIKey)
+				m.screen = ScreenAPIInput
+			case "4":
+				m.selectedAPI = "anthropic"
+				m.apiInput.SetValue(m.config.AnthropicAPIKey)
+				m.screen = ScreenAPIInput
+			case "5":
+				m.selectedAPI = "minimax"
+				m.apiInput.SetValue(m.config.MinimaxAPIKey)
+				m.screen = ScreenAPIInput
+			case "6":
+				m.selectedAPI = "openaicompatible"
+				m.apiInput.SetValue(m.config.OpenAICompatibleAPIKey)
+				m.screen = ScreenAPIInput
+			case "0", "b", "esc":
+				m.screen = ScreenMain
+				m.checkStatus()
+			}
+		} else if m.screen == ScreenModel {
+			switch msg.String() {
+			case "1":
+				m.config.Provider = "auto"
+				m.saveConfig()
+				m.screen = ScreenMain
+			case "2":
+				m.config.Provider = "lmstudio"
+				m.config.Model = "Auto-detectado por LM Studio"
+				m.saveConfig()
+				m.screen = ScreenMain
+			case "3":
+				m.config.Provider = "ollama"
+				m.config.Model = "Auto-detectado por Ollama"
+				m.saveConfig()
+				m.screen = ScreenMain
+			case "4":
+				m.config.Provider = "openai"
+				m.config.Model = "gpt-4o"
+				m.saveConfig()
+				m.screen = ScreenMain
+			case "5":
+				m.config.Provider = "gemini"
+				m.config.Model = "gemini-2.5-flash"
+				m.saveConfig()
+				m.screen = ScreenMain
+			case "6":
+				m.config.Provider = "deepseek"
+				m.config.Model = "deepseek-chat"
+				m.saveConfig()
+				m.screen = ScreenMain
+			case "7":
+				m.config.Provider = "anthropic"
+				m.config.Model = "claude-3-5-sonnet-20241022"
+				m.saveConfig()
+				m.screen = ScreenMain
+			}
+		} else if m.screen == ScreenAPIInput {
+			switch msg.Type {
+			case tea.KeyEnter:
+				val := m.apiInput.Value()
+				switch m.selectedAPI {
+				case "openai":
+					m.config.OpenAIAPIKey = val
+				case "deepseek":
+					m.config.DeepSeekAPIKey = val
+				case "gemini":
+					m.config.GeminiAPIKey = val
+				case "anthropic":
+					m.config.AnthropicAPIKey = val
+				case "minimax":
+					m.config.MinimaxAPIKey = val
+				case "openaicompatible":
+					m.config.OpenAICompatibleAPIKey = val
+				}
+				m.saveConfig()
+				m.screen = ScreenKeys
+				m.apiInput.Reset()
+				m.checkStatus()
+			}
+			m.apiInput, cmd = m.apiInput.Update(msg)
+			return m, cmd
+		} else if m.screen == ScreenSetup {
+			switch msg.String() {
+			case "enter", "esc", "b", "0":
+				m.screen = ScreenMain
+				m.checkStatus()
+			}
+		}
+	}
+
+	return m, cmd
+}
+		return m, nil
+	case sandboxResetMsg:
+		m.checkStatus()
+		if msg.err != nil {
+			m.err = msg.err
+		} else {
+			m.err = nil
+		}
+		return m, nil
+	case processFinishedMsg:
+		m.checkStatus()
+		return m, nil
+	case tea.KeyMsg:
+		switch msg.Type {
+		case tea.KeyCtrlC, tea.KeyEsc:
+			if m.screen != ScreenMain {
+				m.screen = ScreenMain
+				m.apiInput.Reset()
+				m.chatInput.Reset()
+				m.checkStatus()
+				return m, nil
+			}
+			m.quitting = true
+			return m, tea.Quit
+		}
+
+		if m.screen == ScreenMain {
+			switch msg.String() {
+			case "up", "k":
+				if m.cursor > 0 {
+					m.cursor--
+				} else {
+					m.cursor = len(m.choices) - 1
+				}
+			case "down", "j":
+				if m.cursor < len(m.choices)-1 {
+					m.cursor++
+				} else {
+					m.cursor = 0
+				}
+			case "enter":
 				choice := m.choices[m.cursor]
 				if strings.Contains(choice, "Terminal") {
 					m.screen = ScreenChat
