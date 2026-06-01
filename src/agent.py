@@ -284,6 +284,12 @@ class AntiAgent:
                     score = float(val)
             votes = result.get("votes", []) if result and isinstance(result, dict) else []
 
+            # If the scorer returned None/unparseable score, the model can't judge quality.
+            # Don't waste time refining — return as-is.
+            if result is None or (isinstance(result, dict) and result.get("score") is None):
+                app_logger.info("[Agent] PRM scorer returned None — skipping refinement")
+                return response, 0.0, False, []
+
             max_refinements = 3
             refinement_step = 0
 

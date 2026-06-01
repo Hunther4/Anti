@@ -53,7 +53,7 @@ class MemoryConsolidator:
         
         try:
             # Obtener observaciones con bajo score
-            low_score_obs = self.memory.archive._get_low_score_observations(
+            low_score_obs = await self.memory.archive._get_low_score_observations(
                 threshold=PURGE_THRESHOLD
             )
             
@@ -85,7 +85,7 @@ class MemoryConsolidator:
                     to_purge.append(obs["id"])
             
             if to_purge:
-                deleted = self.memory.archive.purge_observations(to_purge)
+                deleted = await self.memory.archive.purge_observations(to_purge)
                 logger.info(f"Auto-purge: {deleted} observaciones eliminadas")
                 return deleted
             
