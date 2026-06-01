@@ -13,5 +13,14 @@
   "enable_prm_scorer": true,
   "server_port": 8001,
   "max_history_len_local": 10,
-  "max_history_len_cloud": 100
+  "max_history_len_cloud": 100,
+
+  "_comment_api_keys": "Completá SOLO los proveedores que uses. Nunca commitees este archivo una vez que tenga keys reales — `config.json` y `config.local.json` están en `.gitignore`.",
+  "openai_api_key": "",
+  "deepseek_api_key": "",
+  "gemini_api_key": "",
+  "anthropic_api_key": "",
+  "minimax_api_key": "",
+  "openaicompatible_api_key": "",
+  "openaicompatible_url": ""
 }

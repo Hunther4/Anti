@@ -13,8 +13,12 @@ import os
 import sys
 import json
 import logging
+import contextvars
 from datetime import datetime
 from pathlib import Path
+
+# Correlation ID — set per-request, included in all JSON log entries
+request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar('request_id', default='')
 
 
 class Colors:
@@ -93,6 +97,10 @@ class JsonFileHandler(logging.Handler):
                 "module": record.name,
                 "message": record.getMessage(),
             }
+            # Include correlation ID if set
+            rid = request_id_var.get('')
+            if rid:
+                log_entry["request_id"] = rid
             if record.exc_info and record.exc_info[0] is not None:
                 import traceback
                 log_entry["exception"] = "".join(
@@ -197,3 +205,13 @@ class AppLogger:
     def get_log_file_path(self) -> str:
         """Return the path to the JSON log file."""
         return self.log_file
+
+
+def set_request_id(rid: str):
+    """Set the current correlation ID for all subsequent log entries."""
+    request_id_var.set(rid)
+
+
+def get_request_id() -> str:
+    """Get the current correlation ID."""
+    return request_id_var.get('')

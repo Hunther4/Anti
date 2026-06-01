@@ -3,16 +3,19 @@ package main
 import (
 	crypto_rand "crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -39,7 +42,6 @@ var (
 	purple  = lipgloss.Color("#5f5f87")
 	yellow  = lipgloss.Color("#ffcc00")
 
-
 	titleStyle = lipgloss.NewStyle().
 			Foreground(cyan).
 			Bold(true).
@@ -51,8 +53,6 @@ var (
 			Italic(true).
 			MarginLeft(2).
 			MarginBottom(1)
-
-	// boxStyle reserved for future modal dialogs
 
 	selectedItemStyle = lipgloss.NewStyle().
 				Foreground(cyan).
@@ -106,19 +106,24 @@ type ModelStatus struct {
 }
 
 type model struct {
-	cursor       int
-	choices      []string
-	config       Config
-	status       ModelStatus
-	screen       Screen
-	selectedAPI  string
-	apiInput     textinput.Model
-	chatInput    textinput.Model
-	chatHistory  []string
-	activeJobId  string
-	err          error
-	quitting     bool
-	pythonPath   string
+	cursor          int
+	choices         []string
+	config          Config
+	status          ModelStatus
+	screen          Screen
+	selectedAPI     string
+	apiInput        textinput.Model
+	chatInput       textinput.Model
+	chatHistory     []string
+	activeJobId     string
+	chatViewport    viewport.Model
+	viewingResponse bool
+	width           int
+	height          int
+	err             error
+	quitting        bool
+	pythonPath      string
+	lastStatusCheck time.Time
 }
 
 type processFinishedMsg struct{}
@@ -129,6 +134,19 @@ type sandboxStatsMsg struct {
 	usedMB int64
 	limMB  int64
 	online bool
+}
+
+type statusData struct {
+	LMStudioOnline  bool
+	OllamaOnline    bool
+	WorkspaceFiles  int
+	EngramsCount    int
+	BootEngrams     int
+	SandboxOnline   bool
+}
+
+type statusUpdateMsg struct {
+	data statusData
 }
 
 func tickSandboxStats() tea.Cmd {
@@ -144,17 +162,25 @@ func (m *model) sendChatMessage(msg string) tea.Cmd {
 		payload := map[string]string{"message": msg}
 		body, _ := json.Marshal(payload)
 
-		resp, err := http.Post(url, "application/json", strings.NewReader(string(body)))
+		resp, err := SignedPost(url, "application/json", body)
 		if err != nil {
 			return chatErrorMsg{err: err}
 		}
 		defer resp.Body.Close()
 
+		if resp.StatusCode == http.StatusForbidden {
+			return chatErrorMsg{err: fmt.Errorf("403 forbidden: backend rejected HMAC signature")}
+		}
+
 		var res map[string]string
 		if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 			return chatErrorMsg{err: err}
 		}
-		return chatJobIdMsg{jobId: res["job_id"]}
+		jobId := res["job_id"]
+		if jobId == "" {
+			return chatErrorMsg{err: fmt.Errorf("no job_id in response")}
+		}
+		return chatJobIdMsg{jobId: jobId}
 	}
 }
 
@@ -172,10 +198,21 @@ func (m *model) pollJobStatus(jobId string) tea.Cmd {
 			return chatErrorMsg{err: err}
 		}
 
-		status := res["status"].(string)
+		status, ok := res["status"].(string)
+		if !ok {
+			return chatErrorMsg{err: fmt.Errorf("invalid status type")}
+		}
+
 		if status == "completed" {
-			result := res["result"].(map[string]interface{})
-			return chatResponseMsg{response: result["response"].(string)}
+			result, ok := res["result"].(map[string]interface{})
+			if !ok {
+				return chatErrorMsg{err: fmt.Errorf("invalid result type")}
+			}
+			resp, ok := result["response"].(string)
+			if !ok {
+				resp = "No response from backend"
+			}
+			return chatResponseMsg{response: resp}
 		} else if status == "failed" {
 			return chatErrorMsg{err: fmt.Errorf("job failed: %v", res["error"])}
 		}
@@ -188,7 +225,6 @@ type chatJobIdMsg struct{ jobId string }
 type chatResponseMsg struct{ response string }
 type chatErrorMsg struct{ err error }
 type pollContinueMsg struct{}
-
 
 func doResetSandbox(cwd string) tea.Cmd {
 	return func() tea.Msg {
@@ -204,11 +240,15 @@ func initialModel() model {
 	ti.CharLimit = 150
 	ti.Width = 35
 
-	ci := textinput.New()
-	ci.Placeholder = "Escribe un mensaje para Anti..."
-	ci.Focus()
+	cti := textinput.New()
+	cti.Placeholder = "Escribí tu mensaje..."
+	cti.Focus()
+	cti.CharLimit = 500
+	cti.Width = 40
 
-	// Determine correct python command inside venv
+	vp := viewport.New(40, 20)
+	vp.SetContent("")
+
 	pythonPath := "./venv/bin/python"
 	if _, err := os.Stat(pythonPath); os.IsNotExist(err) {
 		pythonPath = "python3"
@@ -218,27 +258,45 @@ func initialModel() model {
 		choices: []string{
 			"🖥️  Terminal (Ejecutar Anti)",
 			"🌐  Web Host (Servidor Interactivo)",
+			"💬  Chat (Hablar con Anti)",
 			"🔌  Conexiones API (Gestionar Claves)",
 			"🤖  Elegir Modelo (Seleccionar IA)",
 			"⚙️  Instalación & Setup (Diagnóstico)",
 			"🐳  Reiniciar Sandbox (Docker)",
 			"🚪  Salir",
 		},
-		screen:     ScreenMain,
-		apiInput:   ti,
-		chatInput:  ci,
-		pythonPath: pythonPath,
+		screen:       ScreenMain,
+		apiInput:     ti,
+		chatInput:    cti,
+		chatViewport: vp,
+		pythonPath:   pythonPath,
 	}
 
 	m.loadConfig()
-	m.checkStatus()
 	return m
 }
 
+// resolveConfigPath implements the "Local-First" strategy:
+//   1. Prefer config.local.json (gitignored, may contain API keys).
+//   2. Fallback to config.json (gitignored, team-shared defaults).
+//   3. If neither exists, return an empty string and let the caller surface
+//      the actionable error.
+func resolveConfigPath() string {
+	if _, err := os.Stat("config.local.json"); err == nil {
+		return "config.local.json"
+	}
+	if _, err := os.Stat("config.json"); err == nil {
+		return "config.json"
+	}
+	return ""
+}
+
+const configNotFoundMsg = "Configuration file not found. Please copy config.json.example to config.local.json and fill in your keys."
+
 func (m *model) loadConfig() {
-	configPath := "config.json"
-	file, err := os.ReadFile(configPath)
-	if err != nil {
+	configPath := resolveConfigPath()
+	if configPath == "" {
+		m.err = errors.New(configNotFoundMsg)
 		m.config = Config{
 			AgentName:   "Anti",
 			Language:    "es",
@@ -246,6 +304,12 @@ func (m *model) loadConfig() {
 			LMStudioURL: "http://127.0.0.1:1234/v1",
 			OllamaURL:   "http://127.0.0.1:11434",
 		}
+		return
+	}
+
+	file, err := os.ReadFile(configPath)
+	if err != nil {
+		m.err = err
 		return
 	}
 
@@ -258,69 +322,105 @@ func (m *model) loadConfig() {
 }
 
 func (m *model) saveConfig() {
-	configPath := "config.json"
+	// Always write to the personal/local file so we never clobber shared
+	// defaults. Create it from the example if nothing exists yet.
+	configPath := "config.local.json"
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		if _, err := os.Stat("config.json"); err == nil {
+			// Seed from defaults so the user inherits team-shared values.
+			data, readErr := os.ReadFile("config.json")
+			if readErr == nil {
+				_ = os.WriteFile(configPath, data, 0600)
+			}
+		}
+	}
 	data, err := json.MarshalIndent(m.config, "", "  ")
 	if err != nil {
 		m.err = err
 		return
 	}
-	_ = os.WriteFile(configPath, data, 0644)
+	_ = os.WriteFile(configPath, data, 0600)
 }
 
-func (m *model) checkStatus() {
-	// 1. Check workspace files count
-	files, _ := filepath.Glob("workspace/*")
-	m.status.WorkspaceFiles = len(files)
-
-	// 2. Simple engram database size or count
-	dbPath := "memory/cold_archive.db"
-	if fi, err := os.Stat(dbPath); err == nil {
-		m.status.EngramsCount = int(fi.Size() / 1024) // size in KB as simple indicator
+func (m *model) asyncCheckStatus() tea.Cmd {
+	if time.Since(m.lastStatusCheck) < 2*time.Second {
+		return nil
 	}
+	m.lastStatusCheck = time.Now()
+	return checkStatusAsync(m.config.LMStudioURL, m.config.OllamaURL)
+}
 
-	// Read cached boot_payload to get active engrams count
-	if data, err := os.ReadFile("memory/boot_payload.json"); err == nil {
-		var bp struct {
-			BootEngramsCount int `json:"boot_engrams_count"`
+func checkStatusAsync(lmStudioURL, ollamaURL string) tea.Cmd {
+	return func() tea.Msg {
+		var lmOnline, ollamaOnline, sandboxOnline bool
+		var workspaceFiles, engramsCount, bootEngrams int
+		var wg sync.WaitGroup
+
+		files, _ := filepath.Glob("workspace/*")
+		workspaceFiles = len(files)
+
+		dbPath := "memory/cold_archive.db"
+		if fi, err := os.Stat(dbPath); err == nil {
+			engramsCount = int(fi.Size() / 1024)
 		}
-		if json.Unmarshal(data, &bp) == nil {
-			m.status.BootEngrams = bp.BootEngramsCount
+
+		if data, err := os.ReadFile("memory/boot_payload.json"); err == nil {
+			var bp struct {
+				BootEngramsCount int `json:"boot_engrams_count"`
+			}
+			if json.Unmarshal(data, &bp) == nil {
+				bootEngrams = bp.BootEngramsCount
+			}
 		}
-	}
 
-	// 3. Ping local providers in background or quickly with healthy timeout
-	client := http.Client{Timeout: 750 * time.Millisecond}
-	
-	lmURL := m.config.LMStudioURL
-	if lmURL == "" {
-		lmURL = "http://127.0.0.1:1234/v1"
-	}
-	resp, err := client.Get(lmURL + "/models")
-	if err == nil && resp != nil {
-		m.status.LMStudioOnline = resp.StatusCode == 200
-		_ = resp.Body.Close()
-	} else {
-		m.status.LMStudioOnline = false
-	}
+		wg.Add(3)
 
-	ollamaURL := m.config.OllamaURL
-	if ollamaURL == "" {
-		ollamaURL = "http://127.0.0.1:11434"
-	}
-	resp2, err2 := client.Get(ollamaURL + "/api/tags")
-	if err2 == nil && resp2 != nil {
-		m.status.OllamaOnline = resp2.StatusCode == 200
-		_ = resp2.Body.Close()
-	} else {
-		m.status.OllamaOnline = false
-	}
+		go func() {
+			defer wg.Done()
+			client := http.Client{Timeout: 750 * time.Millisecond}
+			url := lmStudioURL
+			if url == "" {
+				url = "http://127.0.0.1:1234/v1"
+			}
+			resp, err := client.Get(url + "/models")
+			if err == nil && resp != nil {
+				lmOnline = resp.StatusCode == 200
+				_ = resp.Body.Close()
+			}
+		}()
 
-	// 4. Check Sandbox state
-	sandboxCheckCmd := exec.Command("docker", "inspect", "-f", "{{.State.Running}}", "anti-sandbox")
-	if out, err := sandboxCheckCmd.Output(); err == nil {
-		m.status.SandboxOnline = strings.TrimSpace(string(out)) == "true"
-	} else {
-		m.status.SandboxOnline = false
+		go func() {
+			defer wg.Done()
+			client := http.Client{Timeout: 750 * time.Millisecond}
+			url := ollamaURL
+			if url == "" {
+				url = "http://127.0.0.1:11434"
+			}
+			resp, err := client.Get(url + "/api/tags")
+			if err == nil && resp != nil {
+				ollamaOnline = resp.StatusCode == 200
+				_ = resp.Body.Close()
+			}
+		}()
+
+		go func() {
+			defer wg.Done()
+			out, err := exec.Command("docker", "inspect", "-f", "{{.State.Running}}", "anti-sandbox").Output()
+			if err == nil {
+				sandboxOnline = strings.TrimSpace(string(out)) == "true"
+			}
+		}()
+
+		wg.Wait()
+
+		return statusUpdateMsg{data: statusData{
+			LMStudioOnline: lmOnline,
+			OllamaOnline:   ollamaOnline,
+			WorkspaceFiles: workspaceFiles,
+			EngramsCount:   engramsCount,
+			BootEngrams:    bootEngrams,
+			SandboxOnline:  sandboxOnline,
+		}}
 	}
 }
 
@@ -328,6 +428,7 @@ func (m model) Init() tea.Cmd {
 	return tea.Batch(
 		textinput.Blink,
 		tickSandboxStats(),
+		m.asyncCheckStatus(),
 	)
 }
 
@@ -335,21 +436,54 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		headerReserve := 10
+		vpWidth := 40
+		if m.width > 0 {
+			if w := m.width/2 - 6; w > vpWidth {
+				vpWidth = w
+			}
+		}
+		vpHeight := m.height - headerReserve
+		if vpHeight < 5 {
+			vpHeight = 5
+		}
+		m.chatViewport.Width = vpWidth
+		m.chatViewport.Height = vpHeight
+		m.refreshChatViewport()
+		return m, nil
 	case sandboxStatsMsg:
 		m.status.SandboxOnline = msg.online
 		m.status.SandboxMemUsedMB = msg.usedMB
 		m.status.SandboxMemLimMB = msg.limMB
 		return m, tickSandboxStats()
+	case statusUpdateMsg:
+		m.status.LMStudioOnline = msg.data.LMStudioOnline
+		m.status.OllamaOnline = msg.data.OllamaOnline
+		m.status.WorkspaceFiles = msg.data.WorkspaceFiles
+		m.status.EngramsCount = msg.data.EngramsCount
+		m.status.BootEngrams = msg.data.BootEngrams
+		m.status.SandboxOnline = msg.data.SandboxOnline
+		return m, nil
 	case chatJobIdMsg:
 		m.activeJobId = msg.jobId
+		m.refreshChatViewport()
 		return m, m.pollJobStatus(msg.jobId)
 	case chatResponseMsg:
 		m.chatHistory = append(m.chatHistory, "Anti: "+msg.response)
 		m.activeJobId = ""
+		m.viewingResponse = true
+		m.chatInput.Blur()
+		m.refreshChatViewport()
 		return m, nil
 	case chatErrorMsg:
 		m.chatHistory = append(m.chatHistory, "Error: "+msg.err.Error())
 		m.activeJobId = ""
+		m.viewingResponse = true
+		m.chatInput.Blur()
+		m.refreshChatViewport()
 		return m, nil
 	case pollContinueMsg:
 		if m.activeJobId != "" {
@@ -357,15 +491,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case sandboxResetMsg:
-		m.checkStatus()
+		cmd = m.asyncCheckStatus()
 		if msg.err != nil {
 			m.err = msg.err
 		} else {
 			m.err = nil
 		}
-		return m, nil
+		return m, cmd
 	case processFinishedMsg:
-		m.checkStatus()
+		return m, m.asyncCheckStatus()
+	case tea.MouseMsg:
+		if m.screen == ScreenChat && m.viewingResponse {
+			var vpCmd tea.Cmd
+			m.chatViewport, vpCmd = m.chatViewport.Update(msg)
+			return m, vpCmd
+		}
 		return m, nil
 	case tea.KeyMsg:
 		switch msg.Type {
@@ -374,8 +514,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.screen = ScreenMain
 				m.apiInput.Reset()
 				m.chatInput.Reset()
-				m.checkStatus()
-				return m, nil
+				m.viewingResponse = false
+				return m, m.asyncCheckStatus()
 			}
 			m.quitting = true
 			return m, tea.Quit
@@ -396,410 +536,42 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cursor = 0
 				}
 			case "enter":
-				choice := m.choices[m.// fix line 400-423 logic
-				choice := m.choices[m.cursor]
-				if strings.Contains(choice, "Terminal") {
-					m.screen = ScreenChat
-					m.chatInput.Focus()
-					return m, func() tea.Msg {
-						cmd := exec.Command("python3", "server.py")
-						cmd.Start()
-						return processFinishedMsg{}
-					}
-				} else if strings.Contains(choice, "API") {
-					m.screen = ScreenAPIInput
-					m.apiInput.Focus()
-					return m, nil
-				} else if strings.Contains(choice, "Modelo") {
-					m.screen = ScreenModel
-					return m, nil
-				} else if strings.Contains(choice, "Instalación") {
-					m.screen = ScreenSetup
-					return m, nil
-				} else if strings.Contains(choice, "Sandbox") {
-					return m, doResetSandbox(".")
-				} else if strings.Contains(choice, "Salir") {
-					m.quitting = true
-					return m, tea.Quit
-				}
-			}
-		} else if m.screen == ScreenChat {
-			switch msg.Type {
-			case tea.KeyEnter:
-				input := m.chatInput.Value()
-				if input == "" {
-					return m, nil
-				}
-				m.chatHistory = append(m.chatHistory, "User: "+input)
-				m.chatInput.SetValue("")
-				m.activeJobId = ""
-				return m, m.sendChatMessage(input)
-			}
-			return m, m.chatInput.Update(msg)
-		} else if m.screen == ScreenKeys {
-			switch msg.String() {
-			case "1":
-				m.selectedAPI = "openai"
-				m.apiInput.SetValue(m.config.OpenAIAPIKey)
-				m.screen = ScreenAPIInput
-			case "2":
-				m.selectedAPI = "deepseek"
-				m.apiInput.SetValue(m.config.DeepSeekAPIKey)
-				m.screen = ScreenAPIInput
-			case "3":
-				m.selectedAPI = "gemini"
-				m.apiInput.SetValue(m.config.GeminiAPIKey)
-				m.screen = ScreenAPIInput
-			case "4":
-				m.selectedAPI = "anthropic"
-				m.apiInput.SetValue(m.config.AnthropicAPIKey)
-				m.screen = ScreenAPIInput
-			case "5":
-				m.selectedAPI = "minimax"
-				m.apiInput.SetValue(m.config.MinimaxAPIKey)
-				m.screen = ScreenAPIInput
-			case "6":
-				m.selectedAPI = "openaicompatible"
-				m.apiInput.SetValue(m.config.OpenAICompatibleAPIKey)
-				m.screen = ScreenAPIInput
-			case "0", "b", "esc":
-				m.screen = ScreenMain
-				m.checkStatus()
-			}
-		} else if m.screen == ScreenModel {
-			switch msg.String() {
-			case "1":
-				m.config.Provider = "auto"
-				m.saveConfig()
-				m.screen = ScreenMain
-			case "2":
-				m.config.Provider = "lmstudio"
-				m.config.Model = "Auto-detectado por LM Studio"
-				m.saveConfig()
-				m.screen = ScreenMain
-			case "3":
-				m.config.Provider = "ollama"
-				m.config.Model = "Auto-detectado por Ollama"
-				m.saveConfig()
-				m.screen = ScreenMain
-			case "4":
-				m.config.Provider = "openai"
-				m.config.Model = "gpt-4o"
-				m.saveConfig()
-				m.screen = ScreenMain
-			case "5":
-				m.config.Provider = "gemini"
-				m.config.Model = "gemini-2.5-flash"
-				m.saveConfig()
-				m.screen = ScreenMain
-			case "6":
-				m.config.Provider = "deepseek"
-				m.config.Model = "deepseek-chat"
-				m.saveConfig()
-				m.screen = ScreenMain
-			case "7":
-				m.config.Provider = "anthropic"
-				m.config.Model = "claude-3-5-sonnet-20241022"
-				m.saveConfig()
-				m.screen = ScreenMain
-			}
-		} else if m.screen == ScreenAPIInput {
-			switch msg.Type {
-			case tea.KeyEnter:
-				val := m.apiInput.Value()
-				switch m.selectedAPI {
-				case "openai":
-					m.config.OpenAIAPIKey = val
-				case "deepseek":
-					m.config.DeepSeekAPIKey = val
-				case "gemini":
-					m.config.GeminiAPIKey = val
-				case "anthropic":
-					m.config.AnthropicAPIKey = val
-				case "minimax":
-					m.config.MinimaxAPIKey = val
-				case "openaicompatible":
-					m.config.OpenAICompatibleAPIKey = val
-				}
-				m.saveConfig()
-				m.screen = ScreenKeys
-				m.apiInput.Reset()
-				m.checkStatus()
-			}
-			m.apiInput, cmd = m.apiInput.Update(msg)
-			return m, cmd
-		} else if m.screen == ScreenSetup {
-			switch msg.String() {
-			case "enter", "esc", "b", "0":
-				m.screen = ScreenMain
-				m.checkStatus()
-			}
-		}
-	}
-
-	return m, cmd
-}
-		return m, nil
-	case sandboxResetMsg:
-		m.checkStatus()
-		if msg.err != nil {
-			m.err = msg.err
-		} else {
-			m.err = nil
-		}
-		return m, nil
-	case processFinishedMsg:
-		m.checkStatus()
-		return m, nil
-	case tea.KeyMsg:
-		switch msg.Type {
-		case tea.KeyCtrlC, tea.KeyEsc:
-			if m.screen != ScreenMain {
-				m.screen = ScreenMain
-				m.apiInput.Reset()
-				m.chatInput.Reset()
-				m.checkStatus()
-				return m, nil
-			}
-			m.quitting = true
-			return m, tea.Quit
-		}
-
-		if m.screen == ScreenMain {
-			switch msg.String() {
-			case "up", "k":
-				if m.cursor > 0 {
-					m.cursor--
-				} else {
-					m.cursor = len(m.choices) - 1
-				}
-			case "down", "j":
-				if m.cursor < len(m.choices)-1 {
-					m.cursor++
-				} else {
-					m.cursor = 0
-				}
-			case "enter":
-				choice := m.choices[m.cursor]
-				if strings.Contains(choice, "Terminal") {
-					m.screen = ScreenChat
-					m.chatInput.Focus()
-					return m, func() tea.Msg {
-						cmd := exec.Command("python3", "server.py")
-						cmd.Start()
-						return processFinishedMsg{}
-					}
-				} else if strings.Contains(choice, "API") {
-					m.screen = ScreenAPIInput
-					m.apiInput.Focus()
-					return m, nil
-				} else if strings.Contains(choice, "Modelo") {
-					m.screen = ScreenModel
-					return m, nil
-				} else if strings.Contains(choice, "Instalación") {
-					m.screen = ScreenSetup
-					return m, nil
-				} else if strings.Contains(choice, "Sandbox") {
-					return m, doResetSandbox(".")
-				} else if strings.Contains(choice, "Salir") {
-					m.quitting = true
-					return m, tea.Quit
-				}
-			}
-		} else if m.screen == ScreenChat {
-			switch msg.Type {
-			case tea.KeyEnter:
-				input := m.chatInput.Value()
-				if input == "" {
-					return m, nil
-				}
-				m.chatHistory = append(m.chatHistory, "User: "+input)
-				m.chatInput.SetValue("")
-				m.activeJobId = ""
-				return m, m.sendChatMessage(input)
-			}
-			return m, m.chatInput.Update(msg)
-		} else if m.screen == ScreenKeys {
-			switch msg.String() {
-			case "1":
-				m.selectedAPI = "openai"
-				m.apiInput.SetValue(m.config.OpenAIAPIKey)
-				m.screen = ScreenAPIInput
-			case "2":
-				m.selectedAPI = "deepseek"
-				m.apiInput.SetValue(m.config.DeepSeekAPIKey)
-				m.screen = ScreenAPIInput
-			case "3":
-				m.selectedAPI = "gemini"
-				m.apiInput.SetValue(m.config.GeminiAPIKey)
-				m.screen = ScreenAPIInput
-			case "4":
-				m.selectedAPI = "anthropic"
-				m.apiInput.SetValue(m.config.AnthropicAPIKey)
-				m.screen = ScreenAPIInput
-			case "5":
-				m.selectedAPI = "minimax"
-				m.apiInput.SetValue(m.config.MinimaxAPIKey)
-				m.screen = ScreenAPIInput
-			case "6":
-				m.selectedAPI = "openaicompatible"
-				m.apiInput.SetValue(m.config.OpenAICompatibleAPIKey)
-				m.screen = ScreenAPIInput
-			case "0", "b", "esc":
-				m.screen = ScreenMain
-				m.checkStatus()
-			}
-		} else if m.screen == ScreenModel {
-			switch msg.String() {
-			case "1":
-				m.config.Provider = "auto"
-				m.saveConfig()
-				m.screen = ScreenMain
-			case "2":
-				m.config.Provider = "lmstudio"
-				m.config.Model = "Auto-detectado por LM Studio"
-				m.saveConfig()
-				m.screen = ScreenMain
-			case "3":
-				m.config.Provider = "ollama"
-				m.config.Model = "Auto-detectado por Ollama"
-				m.saveConfig()
-				m.screen = ScreenMain
-			case "4":
-				m.config.Provider = "openai"
-				m.config.Model = "gpt-4o"
-				m.saveConfig()
-				m.screen = ScreenMain
-			case "5":
-				m.config.Provider = "gemini"
-				m.config.Model = "gemini-2.5-flash"
-				m.saveConfig()
-				m.screen = ScreenMain
-			case "6":
-				m.config.Provider = "deepseek"
-				m.config.Model = "deepseek-chat"
-				m.saveConfig()
-				m.screen = ScreenMain
-			case "7":
-				m.config.Provider = "anthropic"
-				m.config.Model = "claude-3-5-sonnet-20241022"
-				m.saveConfig()
-				m.screen = ScreenMain
-			}
-		}
-	}
-
-	return m, cmd
-}
-		return m, nil
-	case sandboxResetMsg:
-		m.checkStatus()
-		if msg.err != nil {
-			m.err = msg.err
-		} else {
-			m.err = nil
-		}
-		return m, nil
-	case processFinishedMsg:
-		m.checkStatus()
-		return m, nil
-	case tea.KeyMsg:
-		switch msg.Type {
-		case tea.KeyCtrlC, tea.KeyEsc:
-			if m.screen != ScreenMain {
-				m.screen = ScreenMain
-				m.apiInput.Reset()
-				m.chatInput.Reset()
-				m.checkStatus()
-				return m, nil
-			}
-			m.quitting = true
-			return m, tea.Quit
-		}
-
-		if m.screen == ScreenMain {
-			switch msg.String() {
-			case "up", "k":
-				if m.cursor > 0 {
-					m.cursor--
-				} else {
-					m.cursor = len(m.choices) - 1
-				}
-			case "down", "j":
-				if m.cursor < len(m.choices)-1 {
-					m.cursor++
-				} else {
-					m.cursor = 0
-				}
-			case "enter":
-				choice := m.choices[m.cursor]
-				if strings.Contains(choice, "Terminal") {
-					// Start server and go to chat
-					m.screen = ScreenChat
-					m.chatInput.Focus()
-					return m, func() tea.Msg {
-						cmd := exec.Command("python3", "server.py")
-						cmd.Start()
-						return processFinishedMsg{}
-					}
-				} else if strings.Contains(choice, "API") {
-					m.screen = ScreenAPIInput
-					m.apiInput.Focus()
-					return m, nil
-				} else if strings.Contains(choice, "Modelo") {
-					m.screen = ScreenModel
-					return m, nil
-				} else if strings.Contains(choice, "Instalación") {
-					m.screen = ScreenSetup
-					return m, nil
-				} else if strings.Contains(choice, "Sandbox") {
-					return m, doResetSandbox(".")
-				} else if strings.Contains(choice, "Salir") {
-					m.quitting = true
-					return m, tea.Quit
-				}
-			}
-		} else if m.screen == ScreenChat {
-			switch msg.Type {
-			case tea.KeyEnter:
-				input := m.chatInput.Value()
-				if input == "" {
-					return m, nil
-				}
-				m.chatHistory = append(m.chatHistory, "User: "+input)
-				m.chatInput.SetValue("")
-				m.activeJobId = ""
-				return m, m.sendChatMessage(input)
-			}
-			return m, m.chatInput.Update(msg)
-		}
-			m.quitting = true
-			return m, tea.Quit
-		}
-
-		if m.screen == ScreenMain {
-			switch msg.String() {
-			case "up", "k":
-				if m.cursor > 0 {
-					m.cursor--
-				} else {
-					m.cursor = len(m.choices) - 1
-				}
-			case "down", "j":
-				if m.cursor < len(m.choices)-1 {
-					m.cursor++
-				} else {
-					m.cursor = 0
-				}
+				return m.handleMainMenuSelection()
 			case "r":
 				cwd, _ := os.Getwd()
 				_ = ResetSandbox(cwd)
-				m.checkStatus()
+				cmd = m.asyncCheckStatus()
 			case "p":
 				_ = os.Remove("memory/logs.jsonl")
-			case "enter":
-				return m.handleMainMenuSelection()
 			}
+		} else if m.screen == ScreenChat {
+			if m.viewingResponse {
+				switch msg.String() {
+				case "enter":
+					m.viewingResponse = false
+					m.chatInput.Focus()
+					return m, nil
+				}
+				var vpCmd tea.Cmd
+				m.chatViewport, vpCmd = m.chatViewport.Update(msg)
+				return m, vpCmd
+			}
+			switch msg.Type {
+			case tea.KeyEnter:
+				input := m.chatInput.Value()
+				if input == "" {
+					return m, nil
+				}
+				m.chatHistory = append(m.chatHistory, "User: "+input)
+				m.chatInput.SetValue("")
+				m.activeJobId = ""
+				m.viewingResponse = false
+				m.refreshChatViewport()
+				return m, m.sendChatMessage(input)
+			}
+			var cmd2 tea.Cmd
+			m.chatInput, cmd2 = m.chatInput.Update(msg)
+			return m, cmd2
 		} else if m.screen == ScreenKeys {
 			switch msg.String() {
 			case "1":
@@ -828,7 +600,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.screen = ScreenAPIInput
 			case "0", "b", "esc":
 				m.screen = ScreenMain
-				m.checkStatus()
+				cmd = m.asyncCheckStatus()
 			}
 		} else if m.screen == ScreenModel {
 			switch msg.String() {
@@ -879,9 +651,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "0", "esc":
 				m.screen = ScreenMain
 			}
-			if m.screen == ScreenMain {
-				m.checkStatus()
-			}
+		if m.screen == ScreenMain {
+			cmd = m.asyncCheckStatus()
+		}
 		} else if m.screen == ScreenAPIInput {
 			switch msg.Type {
 			case tea.KeyEnter:
@@ -903,20 +675,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.saveConfig()
 				m.screen = ScreenKeys
 				m.apiInput.Reset()
-				m.checkStatus()
+				cmd = m.asyncCheckStatus()
 			}
 			m.apiInput, cmd = m.apiInput.Update(msg)
 			return m, cmd
 		} else if m.screen == ScreenSetup {
 			switch msg.String() {
-			case "enter", "esc", "b", "0":
-				m.screen = ScreenMain
-				m.checkStatus()
+		case "enter", "esc", "b", "0":
+			m.screen = ScreenMain
+			cmd = m.asyncCheckStatus()
 			}
 		}
 	}
 
-	return m, nil
+	return m, cmd
 }
 
 func (m model) handleMainMenuSelection() (tea.Model, tea.Cmd) {
@@ -926,48 +698,118 @@ func (m model) handleMainMenuSelection() (tea.Model, tea.Cmd) {
 			return processFinishedMsg{}
 		})
 	case 1: // Web Host
-		cmd := exec.Command(m.pythonPath, "server.py")
-		cmd.Env = append(os.Environ(), "ANTI_MANAGED=1")
-		
-		r, w, err := os.Pipe()
-		if err == nil {
-			cmd.Stdin = r
-			cmd.SysProcAttr = &syscall.SysProcAttr{
-				Pdeathsig: syscall.SIGKILL,
-			}
-			go func() {
-				secret := make([]byte, 32)
-				crypto_rand.Read(secret)
-				// Guardar el secreto en memoria de Go por si luego queremos hacer llamadas HTTP firmadas
-				// os.Setenv("ANTI_SECRET", hex.EncodeToString(secret)) // Opcional
-				w.Write(secret)
-				// Mantenemos 'w' abierto como cordón umbilical
-			}()
+		if err := startManagedServer(m.pythonPath); err != nil {
+			m.err = err
 		}
-
-		return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
-			if w != nil {
-				w.Close()
-			}
-			return processFinishedMsg{}
-		})
-	case 2: // API Keys Management
+	case 2: // Chat
+		m.screen = ScreenChat
+		m.refreshChatViewport()
+	case 3: // API Keys Management
 		m.screen = ScreenKeys
-	case 3: // Model / Provider Selection
+	case 4: // Model / Provider Selection
 		m.screen = ScreenModel
-	case 4: // Setup / Diagnostics
+	case 5: // Setup / Diagnostics
 		m.screen = ScreenSetup
-	case 5: // Docker Sandbox Reset
+	case 6: // Docker Sandbox Reset
 		cwd, _ := os.Getwd()
 		return m, doResetSandbox(cwd)
-	case 6: // Exit
+	case 7: // Exit
 		m.quitting = true
 		return m, tea.Quit
 	}
 	return m, nil
 }
 
-// Banner rendering
+func (m *model) refreshChatViewport() {
+	m.chatViewport.SetContent(m.buildChatContent())
+	m.chatViewport.GotoBottom()
+}
+
+func (m model) buildChatContent() string {
+	var chatArea strings.Builder
+	userStyle := lipgloss.NewStyle().Foreground(cyan).Bold(true)
+	antiStyle := lipgloss.NewStyle().Foreground(magenta).Bold(true)
+	errorStyle := lipgloss.NewStyle().Foreground(gray).Italic(true)
+
+	for _, msg := range m.chatHistory {
+		switch {
+		case strings.HasPrefix(msg, "User: "):
+			chatArea.WriteString(userStyle.Render("User:") + " " + msg[6:] + "\n\n")
+		case strings.HasPrefix(msg, "Anti: "):
+			chatArea.WriteString(antiStyle.Render("Anti:") + " " + msg[6:] + "\n\n")
+		default:
+			chatArea.WriteString(errorStyle.Render(msg) + "\n\n")
+		}
+	}
+	if m.activeJobId != "" {
+		chatArea.WriteString(lipgloss.NewStyle().Foreground(yellow).Render("Anti is thinking... 💭") + "\n")
+	}
+	return chatArea.String()
+}
+
+// managedServerStdin holds the write end of the pipe feeding the managed
+// Python server's stdin. The server's umbilical_cord thread monitors this
+// fd; if we ever close it, the server emergency-shuts down. We intentionally
+// do NOT close it for the lifetime of the TUI.
+var managedServerStdin *os.File
+
+// startManagedServer spawns the Python backend in ANTI_MANAGED=1 mode,
+// generates a fresh 32-byte HMAC secret, writes it to the server's stdin,
+// and stores it in the sharedSecret package var so SignedPost can sign
+// subsequent requests. The process runs in the background and dies with
+// the TUI (Pdeathsig).
+func startManagedServer(pythonPath string) error {
+	secret := make([]byte, 32)
+	if _, err := crypto_rand.Read(secret); err != nil {
+		return fmt.Errorf("generate secret: %w", err)
+	}
+	SetSharedSecret(secret)
+
+	// If a previous managed server is still running, sever its stdin so
+	// the umbilical_cord kills it before we start a new instance.
+	if managedServerStdin != nil {
+		_ = managedServerStdin.Close()
+		managedServerStdin = nil
+	}
+
+	cmd := exec.Command(pythonPath, "server.py")
+	cmd.Env = append(os.Environ(), "ANTI_MANAGED=1")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Pdeathsig: syscall.SIGKILL,
+	}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		return fmt.Errorf("pipe: %w", err)
+	}
+	cmd.Stdin = r
+
+	if logFile, ferr := os.OpenFile("logs/server.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); ferr == nil {
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+	} else {
+		devNull, _ := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+		cmd.Stdout = devNull
+		cmd.Stderr = devNull
+	}
+
+	if err := cmd.Start(); err != nil {
+		_ = r.Close()
+		_ = w.Close()
+		return fmt.Errorf("start server: %w", err)
+	}
+	_ = r.Close() // parent doesn't need the read end; child inherited its copy
+
+	if _, err := w.Write(secret); err != nil {
+		return fmt.Errorf("send secret: %w", err)
+	}
+
+	managedServerStdin = w // keep alive: server monitors stdin
+	go func() { _ = cmd.Wait() }()
+
+	return nil
+}
+
 func banner() string {
 	var sb strings.Builder
 	sb.WriteString("  █████  ███    ██ ████████ ██\n")
@@ -980,55 +822,13 @@ func banner() string {
 }
 
 func (m model) View() string {
-	if m.screen == ScreenMain {
-		return m.viewMain()
-	} else if m.screen == ScreenChat {
-		return m.viewChat()
-	} else if m.screen == ScreenAPIInput {
-		return m.viewAPIInput()
-	} else if m.screen == ScreenModel {
-		return m.viewModel()
-	} else if m.screen == ScreenSetup {
-		return m.viewSetup()
-	}
-	return "Error: Unknown Screen"
-}
-
-func (m model) viewChat() string {
-	var chatArea strings.Builder
-	
-	userStyle := lipgloss.NewStyle().Foreground(cyan).Bold(true)
-	antiStyle := lipgloss.NewStyle().Foreground(magenta).Bold(true)
-	errorStyle := lipgloss.NewStyle().Foreground(gray).Italic(true)
-
-	for _, msg := range m.chatHistory {
-		if strings.HasPrefix(msg, "User: ") {
-			chatArea.WriteString(userStyle.Render("User:") + " " + msg[6:] + "\n\n")
-		} else if strings.HasPrefix(msg, "Anti: ") {
-			chatArea.WriteString(antiStyle.Render("Anti:") + " " + msg[6:] + "\n\n")
-		} else {
-			chatArea.WriteString(errorStyle.Render(msg) + "\n\n")
-		}
-	}
-	if m.activeJobId != "" {
-		chatArea.WriteString(lipgloss.NewStyle().Foreground(yellow).Render("Anti is thinking... 💭") + "\n")
-	}
-
-	content := mainContentStyle.Render(chatArea.String())
-	input := m.chatInput.View()
-	
-	header := titleStyle.Render("ANTI CHAT")
-	return fmt.Sprintf("%s\n%s\n\n%s", header, content, input)
-}
-
 	var mainPanel string
 	var sidebarPanel string
 
-	// Build Sidebar Panel (Dynamic, Compact & Clean)
+	// Build Sidebar Panel
 	var sb strings.Builder
 	sb.WriteString(lipgloss.NewStyle().Foreground(magenta).Bold(true).Render("🧠 ESTADO DE ANTI") + "\n\n")
 	
-	// 1. ACTIVE PROVIDER CARD
 	sb.WriteString(lipgloss.NewStyle().Foreground(purple).Bold(true).Render("🤖 PROVEEDOR SELECCIONADO") + "\n")
 	
 	activeProv := m.config.Provider
@@ -1082,7 +882,6 @@ func (m model) viewChat() string {
 	}
 	sb.WriteString(fmt.Sprintf("%s: %s\n", lipgloss.NewStyle().Foreground(gray).Render("Modelo"), lipgloss.NewStyle().Foreground(cyan).Render(modelName)))
 
-	// Connection status of ACTIVE provider
 	statusStr := lipgloss.NewStyle().Foreground(gray).Render("Desconectado ❌")
 	switch activeProv {
 	case "auto":
@@ -1128,7 +927,6 @@ func (m model) viewChat() string {
 	}
 	sb.WriteString(fmt.Sprintf("%s: %s\n\n", lipgloss.NewStyle().Foreground(gray).Render("Conexión"), statusStr))
 
-	// 2. COMPACT READY SERVICES (Only what is ready and not active)
 	sb.WriteString(lipgloss.NewStyle().Foreground(purple).Bold(true).Render("🔌 OTROS DISPONIBLES") + "\n")
 	var readyList []string
 	if m.status.LMStudioOnline && activeProv != "lmstudio" {
@@ -1162,11 +960,9 @@ func (m model) viewChat() string {
 		sb.WriteString(lipgloss.NewStyle().Foreground(white).Render(strings.Join(readyList, ", ")) + "\n\n")
 	}
 
-	// 3. STATS
 	sb.WriteString(fmt.Sprintf("%s: %s\n", lipgloss.NewStyle().Foreground(gray).Render("Workspace Files"), lipgloss.NewStyle().Foreground(white).Render(fmt.Sprintf("%d", m.status.WorkspaceFiles))))
 	sb.WriteString(fmt.Sprintf("%s: %s\n\n", lipgloss.NewStyle().Foreground(gray).Render("Base de Conocimiento"), lipgloss.NewStyle().Foreground(white).Render(fmt.Sprintf("%d KB", m.status.EngramsCount))))
 
-	// 4. SANDBOX TELEMETRY PANEL
 	sb.WriteString(lipgloss.NewStyle().Foreground(purple).Bold(true).Render("🐳 SANDBOX") + "\n")
 	sandboxBadge := lipgloss.NewStyle().Foreground(magenta).Bold(true).Render("[OFFLINE]")
 	if m.status.SandboxOnline {
@@ -1210,7 +1006,6 @@ func (m model) viewChat() string {
 
 	sidebarPanel = sidebarStyle.Render(sb.String())
 
-	// Build Main Panel based on current screen
 	switch m.screen {
 	case ScreenMain:
 		var mainSB strings.Builder
@@ -1302,7 +1097,7 @@ func (m model) viewChat() string {
 		var mainSB strings.Builder
 		mainSB.WriteString(lipgloss.NewStyle().Foreground(cyan).Bold(true).Render("⚙️ DIAGNÓSTICO DEL SISTEMA") + "\n\n")
 
-		filesToCheck := []string{"config.json", "requirements.txt", "main.py", "server.py"}
+		filesToCheck := []string{"config.local.json", "config.json", "config.json.example", "requirements.txt", "main.py", "server.py"}
 		for _, f := range filesToCheck {
 			status := lipgloss.NewStyle().Foreground(cyan).Bold(true).Render("PRESENTE ✅")
 			if _, err := os.Stat(f); os.IsNotExist(err) {
@@ -1313,23 +1108,31 @@ func (m model) viewChat() string {
 
 		mainSB.WriteString("\n[0] Volver al Menú Principal\n")
 		mainPanel = mainContentStyle.Render(mainSB.String())
+
+	case ScreenChat:
+		mainPanel = mainContentStyle.Render(m.chatViewport.View())
 	}
 
-	// Join banner + panels
 	appHeader := titleStyle.Render(banner()) + "\n"
 	appPanels := lipgloss.JoinHorizontal(lipgloss.Top, sidebarPanel, "   ", mainPanel)
+
+	if m.screen == ScreenChat {
+		hint := lipgloss.NewStyle().Foreground(darkGray).Render("Enter: escribir • ↑/↓ PgUp/PgDn: scroll • Esc: volver")
+		if m.viewingResponse {
+			hint = lipgloss.NewStyle().Foreground(cyan).Render("↑/↓ PgUp/PgDn: scroll • Enter: escribir nueva pregunta • Esc: volver")
+		}
+		return appHeader + "\n" + appPanels + "\n\n" + m.chatInput.View() + "\n" + hint
+	}
 
 	return appHeader + "\n" + appPanels + "\n\n"
 }
 
 func main() {
-	// Asegurar que el proceso siempre se ejecute en el directorio donde reside el binario
 	if exePath, err := os.Executable(); err == nil {
 		appDir := filepath.Dir(exePath)
 		_ = os.Chdir(appDir)
 	}
 
-	// Interceptar argumentos del CLI de memoria
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "--mem-init":
@@ -1380,7 +1183,7 @@ func main() {
 		}
 	}
 
-	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
+	p := tea.NewProgram(initialModel(), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Ocurrió un error en el TUI: %v", err)
 		os.Exit(1)
