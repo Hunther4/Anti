@@ -60,7 +60,7 @@ Connect to any LLM backend — local or cloud:
 Set `"provider": "auto"` in `config.local.json` and Anti auto-detects the first available backend.
 
 ### Persistent Memory (Engrams)
-Every conversation, decision, and discovery is stored as structured **engrams** in SQLite with FTS5 full-text search:
+Memory persistence powered by [Engram](https://github.com/Gentleman-Programing/Engram) (by Gentleman-Programing). Every conversation, decision, and discovery is stored as structured **engrams** in SQLite with FTS5 full-text search:
 
 ```bash
 # Search memory from the CLI
