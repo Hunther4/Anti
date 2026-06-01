@@ -171,7 +171,7 @@ class MemoryManager:
                 # Fire-and-forget: schedule the coroutine, don't wait.
                 # The coroutine WILL execute when the event loop processes it,
                 # but we return None immediately to avoid blocking.
-                app_logger.warning(
+                app_logger.debug(
                     "[Memory] _run_async: deadlock guard — scheduling coroutine "
                     "fire-and-forget (background operation may be lost)"
                 )
