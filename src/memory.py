@@ -4,6 +4,7 @@ import re
 import logging
 import asyncio
 import concurrent.futures
+import threading
 from datetime import datetime
 
 from src.logger import AppLogger
@@ -150,9 +151,34 @@ class MemoryManager:
         Run async coroutine synchronously using the orchestrator's event loop.
         Uses run_coroutine_threadsafe to avoid creating new loops (fixes leak).
         Falls back to asyncio.run() if no loop is available.
+        
+        DEADLOCK GUARD: If called from the event loop thread itself, 
+        future.result() would block the loop permanently. We detect this 
+        and fire-and-forget the coroutine, returning None. Callers must 
+        tolerate None returns for background operations (logging, eviction).
         """
+        # DEADLOCK DETECTION: If we're ON the event loop thread, 
+        # future.result() would block forever waiting for itself
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+            
         # Case 1: We have a reference to the orchestrator's loop
         if self._event_loop and self._event_loop.is_running():
+            if running_loop is self._event_loop:
+                # DEADLOCK DETECTED: we're on the event loop thread.
+                # Fire-and-forget: schedule the coroutine, don't wait.
+                # The coroutine WILL execute when the event loop processes it,
+                # but we return None immediately to avoid blocking.
+                app_logger.warning(
+                    "[Memory] _run_async: deadlock guard — scheduling coroutine "
+                    "fire-and-forget (background operation may be lost)"
+                )
+                asyncio.run_coroutine_threadsafe(coro, self._event_loop)
+                return None
+            
+            # Case 1b: Not on event loop thread — safe to use future.result()
             future = asyncio.run_coroutine_threadsafe(coro, self._event_loop)
             try:
                 return future.result(timeout=30)
@@ -164,10 +190,9 @@ class MemoryManager:
                 app_logger.error(f"[Memory] _run_async failed: {e}")
                 return None
 
-        # Case 2: No loop stored — try get_running_loop, then create new one
-        try:
-            loop = asyncio.get_running_loop()
-            future = asyncio.run_coroutine_threadsafe(coro, loop)
+        # Case 2: No stored loop — try get_running_loop, then fallback
+        if running_loop is not None:
+            future = asyncio.run_coroutine_threadsafe(coro, running_loop)
             try:
                 return future.result(timeout=30)
             except concurrent.futures.TimeoutError:
@@ -177,9 +202,9 @@ class MemoryManager:
             except Exception as e:
                 app_logger.error(f"[Memory] _run_async failed: {e}")
                 return None
-        except RuntimeError:
-            # No running loop — safe to create one
-            return asyncio.run(coro)
+        
+        # Case 3: No running loop — safe to create one
+        return asyncio.run(coro)
 
     # --- Workspace helpers ---
 
