@@ -126,6 +126,7 @@ type model struct {
 	err             error
 	quitting        bool
 	pythonPath      string
+	projectRoot     string
 	lastStatusCheck time.Time
 }
 
@@ -252,7 +253,13 @@ func initialModel() model {
 	vp := viewport.New(40, 20)
 	vp.SetContent("")
 
-	pythonPath := "./venv/bin/python"
+	// Resolve pythonPath relative to the executable's directory, not CWD
+	exePath, err := os.Executable()
+	projectRoot := "."
+	if err == nil {
+		projectRoot = filepath.Dir(exePath)
+	}
+	pythonPath := filepath.Join(projectRoot, "venv", "bin", "python")
 	if _, err := os.Stat(pythonPath); os.IsNotExist(err) {
 		pythonPath = "python3"
 	}
@@ -273,6 +280,7 @@ func initialModel() model {
 		chatInput:    cti,
 		chatViewport: vp,
 		pythonPath:   pythonPath,
+		projectRoot:  projectRoot,
 	}
 
 	m.loadConfig()
@@ -724,11 +732,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) handleMainMenuSelection() (tea.Model, tea.Cmd) {
 	switch m.cursor {
 	case 0: // Terminal Client
-		return m, tea.ExecProcess(exec.Command(m.pythonPath, "main.py"), func(err error) tea.Msg {
+		return m, tea.ExecProcess(exec.Command(m.pythonPath, filepath.Join(m.projectRoot, "main.py")), func(err error) tea.Msg {
 			return processFinishedMsg{}
 		})
 	case 1: // Web Host
-		if err := startManagedServer(m.pythonPath); err != nil {
+		if err := startManagedServer(m.pythonPath, m.projectRoot); err != nil {
 			m.err = err
 		}
 	case 2: // Chat
@@ -788,7 +796,7 @@ var managedServerStdin *os.File
 // and stores it in the sharedSecret package var so SignedPost can sign
 // subsequent requests. The process runs in the background and dies with
 // the TUI (Pdeathsig).
-func startManagedServer(pythonPath string) error {
+func startManagedServer(pythonPath string, projectRoot string) error {
 	secret := make([]byte, 32)
 	if _, err := crypto_rand.Read(secret); err != nil {
 		return fmt.Errorf("generate secret: %w", err)
@@ -802,7 +810,7 @@ func startManagedServer(pythonPath string) error {
 		managedServerStdin = nil
 	}
 
-	cmd := exec.Command(pythonPath, "server.py")
+	cmd := exec.Command(pythonPath, filepath.Join(projectRoot, "server.py"))
 	cmd.Env = append(os.Environ(), "ANTI_MANAGED=1")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Pdeathsig: syscall.SIGKILL,
