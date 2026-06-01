@@ -188,7 +188,7 @@ class APIHandler(SimpleHTTPRequestHandler):
             self.end_headers()
 
             # Hybrid Memory Stats
-            archive_stats = agent.memory.archive.get_stats() if hasattr(agent.memory, 'archive') else {"archived_engrams": 0}
+            archive_stats = run_async(agent.memory.archive.get_stats()) if hasattr(agent.memory, 'archive') else {"archived_engrams": 0}
 
             try:
                 run_async(agent.brain.get_context_info())
