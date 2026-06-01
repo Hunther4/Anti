@@ -223,7 +223,7 @@ class MemoryManager:
 
     # --- Logging ---
 
-    def log_experience(self, task, result, success, score=None, votes=None):
+    async def log_experience(self, task, result, success, score=None, votes=None):
         from src.logger import get_request_id
         entry = {
             "timestamp": datetime.now().isoformat(),
@@ -249,7 +249,7 @@ class MemoryManager:
             f.write(json.dumps(entry) + "\n")
             
         # Also log to Cold Path for permanent history
-        self._run_async(self.archive.log_to_history(entry))
+        await self.archive.log_to_history(entry)
 
     def get_recent_logs(self, limit=10):
         if not os.path.exists(self.logs_path):
@@ -398,22 +398,19 @@ class MemoryManager:
         with open(self.usage_stats_path, "w") as f:
             json.dump(stats, f, indent=4)
 
-    def _purge_old_engrams_from_db(self, topics_to_purge: list):
+    async def _purge_old_engrams_from_db(self, topics_to_purge: list):
         """Elimina engrams de la base de datos SQLite por topic."""
         if not topics_to_purge:
             return
         
-        async def purge():
-            conn = await self.archive._get_conn()
-            await conn.executemany(
-                "DELETE FROM engram_archive WHERE topic = ?",
-                [(t,) for t in topics_to_purge]
-            )
-            await conn.commit()
-            
-        self._run_async(purge())
+        conn = await self.archive._get_conn()
+        await conn.executemany(
+            "DELETE FROM engram_archive WHERE topic = ?",
+            [(t,) for t in topics_to_purge]
+        )
+        await conn.commit()
 
-    def decay_old_engrams(self, max_fallos=3):
+    async def decay_old_engrams(self, max_fallos=3):
         """Elimina engrams obsoletos de SQLite y usage_stats.json."""
         if not os.path.exists(self.usage_stats_path):
             return 0
@@ -444,7 +441,7 @@ class MemoryManager:
 
         # Purge from SQLite first; only update stats if DB operation succeeds
         try:
-            self._purge_old_engrams_from_db(topics_to_purge)
+            await self._purge_old_engrams_from_db(topics_to_purge)
         except Exception as e:
             app_logger.error(f"[Memory] Error purging engrams from DB: {e}")
             return 0
