@@ -9,6 +9,7 @@ Cada proveedor debe implementar esta interfaz:
 """
 
 import threading
+import httpx
 from abc import ABC, abstractmethod
 from typing import List, Dict, Tuple, Any, Optional
 
@@ -64,26 +65,20 @@ class BaseProvider(ABC):
         """Verifica conexión con el proveedor."""
         pass
     
-    def get_session(self):
-        """Obtiene o crea una sesión HTTP reusable."""
+    async def get_session(self) -> httpx.AsyncClient:
+        """Obtiene o crea una sesión HTTP asíncrona reusable."""
         if self._session is None:
-            import requests
-            from requests.adapters import HTTPAdapter
-            
-            self._session = requests.Session()
-            adapter = HTTPAdapter(
-                pool_connections=10, 
-                pool_maxsize=10, 
-                max_retries=0
+            self._session = httpx.AsyncClient(
+                timeout=httpx.Timeout(self.timeout, connect=10),
+                limits=httpx.Limits(max_connections=10, max_keepalive_connections=5)
             )
-            self._session.mount('http://', adapter)
-            self._session.mount('https://', adapter)
         return self._session
     
-    def close(self):
+    async def close(self):
         """Cierra la sesión HTTP si existe."""
-        if hasattr(self, '_session') and self._session:
-            self._session.close()
+        if self._session:
+            await self._session.aclose()
+            self._session = None
     
     def __del__(self):
         self.close()
@@ -91,6 +86,7 @@ class BaseProvider(ABC):
     # --- Utilidades comunes ---
     
     def _format_messages(self, messages: List[Dict]) -> List[Dict]:
+        return messages
 
 class ProviderFactory:
     """Factory para crear proveedores automáticamente."""
@@ -108,29 +104,28 @@ class ProviderFactory:
     }
     
     @classmethod
-    def detect(cls, base_url: str = None) -> str:
+    async def detect(cls, base_url: str = None) -> Optional[str]:
         """
-        Detecta el proveedor conectado.
+        Detecta el proveedor conectado de forma asíncrona.
         """
-        import requests
-        
-        if base_url:
-            try:
-                r = requests.get(base_url, timeout=2)
-                if r.status_code < 500:
-                    return base_url
-            except Exception:
-                pass
-        else:
-            for port in [1234, 11434, 8000, 8001]:
+        async with httpx.AsyncClient(timeout=2) as client:
+            if base_url:
                 try:
-                    endpoint = "/api/tags" if port == 11434 else "/v1/models"
-                    url = f"http://127.0.0.1:{port}"
-                    r = requests.get(f"{url}{endpoint}", timeout=2)
-                    if r.status_code == 200:
-                        return url if port == 11434 else f"{url}/v1"
+                    r = await client.get(base_url)
+                    if r.status_code < 500:
+                        return base_url
                 except Exception:
-                    continue
+                    pass
+            else:
+                for port in [1234, 11434, 8000, 8001]:
+                    try:
+                        endpoint = "/api/tags" if port == 11434 else "/v1/models"
+                        url = f"http://127.0.0.1:{port}"
+                        r = await client.get(f"{url}{endpoint}")
+                        if r.status_code == 200:
+                            return url if port == 11434 else f"{url}/v1"
+                    except Exception:
+                        continue
         
         return None
     
@@ -174,11 +169,11 @@ class ProviderFactory:
         raise ValueError(f"Proveedor desconocido: {provider}")
     
     @classmethod
-    def auto_create(cls, base_url: str = None, **kwargs):
+    async def auto_create(cls, base_url: str = None, **kwargs):
         """
         Auto-detecta y crea el proveedor.
         """
-        detected = cls.detect(base_url)
+        detected = await cls.detect(base_url)
         
         if detected:
             if ":11434" in detected:

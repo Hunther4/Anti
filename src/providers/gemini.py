@@ -6,11 +6,12 @@ Requiere API key: export GEMINI_API_KEY=AI...
 API: https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent
 """
 
-import requests
+import httpx
 import os
 import json
 import asyncio
 import logging
+import time
 from typing import List, Dict, Tuple, Any
 
 from .base import BaseProvider
@@ -45,11 +46,6 @@ class GeminiProvider(BaseProvider):
     
     async def chat(self, messages: List[Dict], temperature: float = 0.7) -> Tuple[str, Dict[str, Any]]:
         """Envía un chat a Gemini."""
-        return await asyncio.to_thread(self._chat_sync, messages, temperature)
-
-    def _chat_sync(self, messages: List[Dict], temperature: float = 0.7) -> Tuple[str, Dict[str, Any]]:
-        import time
-        
         if not self.api_key:
             raise ValueError("GEMINI_API_KEY no configurada")
         
@@ -76,8 +72,8 @@ class GeminiProvider(BaseProvider):
         
         for attempt in range(self.max_retries):
             try:
-                session = self.get_session()
-                response = session.post(
+                session = await self.get_session()
+                response = await session.post(
                     url, 
                     json=payload, 
                     params=params,
@@ -114,19 +110,15 @@ class GeminiProvider(BaseProvider):
                 
                 return content_text, usage
                 
-            except requests.exceptions.RequestException as e:
+            except httpx.HTTPError as e:
                 last_error = e
                 if attempt < self.max_retries - 1:
-                    import time as t
-                    t.sleep(2 * (2 ** attempt))
+                    await asyncio.sleep(2 * (2 ** attempt))
         
         raise ConnectionError(f" Gemini no disponible: {last_error}")
     
     async def list_models(self) -> List[Dict[str, Any]]:
         """Lista modelos disponibles en Gemini."""
-        return await asyncio.to_thread(self._list_models_sync)
-
-    def _list_models_sync(self) -> List[Dict[str, Any]]:
         if not self.api_key:
             return []
         
@@ -134,8 +126,8 @@ class GeminiProvider(BaseProvider):
             url = f"{self.base_url}/models"
             params = {"key": self.api_key}
             
-            session = self.get_session()
-            response = session.get(url, params=params, timeout=10)
+            session = await self.get_session()
+            response = await session.get(url, params=params, timeout=10)
             response.raise_for_status()
             
             data = response.json()
@@ -162,7 +154,7 @@ class GeminiProvider(BaseProvider):
     async def sync_model_context(self):
         """Sincroniza modelo y contexto."""
         pass
-
+    
     async def get_context_info(self) -> Dict[str, Any]:
         """Retorna info del contexto."""
         return {
@@ -170,12 +162,9 @@ class GeminiProvider(BaseProvider):
             "usable": self.usable,
             "threshold": self.threshold
         }
-
+    
     async def check_connection(self) -> bool:
         """Verifica conexión con Gemini."""
-        return await asyncio.to_thread(self._check_connection_sync)
-
-    def _check_connection_sync(self) -> bool:
         if not self.api_key:
             return False
         
@@ -184,8 +173,8 @@ class GeminiProvider(BaseProvider):
             url = f"{self.base_url}/models"
             params = {"key": self.api_key}
             
-            session = self.get_session()
-            response = session.get(url, params=params, timeout=5)
+            session = await self.get_session()
+            response = await session.get(url, params=params, timeout=5)
             return response.status_code == 200
         except:
             return False

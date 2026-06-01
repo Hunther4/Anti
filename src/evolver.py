@@ -10,7 +10,7 @@ import json
 import logging
 import os
 import re
-import requests
+import httpx
 from datetime import datetime
 from typing import Any, Dict, Optional, List
 
@@ -46,7 +46,7 @@ class SkillEvolver:
         prompt = self._build_analysis_prompt(failed_logs, current_skills)
 
         try:
-            response = await asyncio.to_thread(self._call_llm, prompt)
+            response = await self._call_llm(prompt)
             raw_skills = self._parse_skills_response(response)
             skills = self._finalise_names(raw_skills)
             return skills[: self.max_new_skills]
@@ -55,14 +55,15 @@ class SkillEvolver:
             logger.error(f"[SkillEvolver] LLM call failed: {e}", exc_info=True)
             return []
 
-    def _call_llm(self, prompt: str) -> str:
+    async def _call_llm(self, prompt: str) -> str:
         payload = {
             "model": self._model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": self.max_completion_tokens,
             "temperature": 0.7
         }
-        response = requests.post(self.prm_url, json=payload, timeout=120)
+        async with httpx.AsyncClient(timeout=120) as client:
+            response = await client.post(self.prm_url, json=payload)
         response.raise_for_status()
         return response.json()['choices'][0]['message']['content']
 

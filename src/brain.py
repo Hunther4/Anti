@@ -1,4 +1,4 @@
-import requests
+import httpx
 import asyncio
 import re
 import logging
@@ -66,15 +66,9 @@ class Brain:
         self.max_retries = 3
         self.timeout = 120
         
-        # Context-aware config (v0.5) — initialize defaults before _update_threshold
+        # Basic model state
         self.context_max = 32000
-        self.usable_threshold = 0.85
         self.last_prompt_tokens = 0
-        self.reserved_system = 1500
-        self.reserved_completion = 3000
-        self.usable = 0
-        self.threshold = 0
-        self._update_threshold()
 
     def close(self):
         """Closes the HTTP session to release resources."""
@@ -82,18 +76,17 @@ class Brain:
             self._session.close()
             self._session = None
 
-    def _get_session(self):
+    async def get_session(self) -> httpx.AsyncClient:
+        """Obtiene o crea una sesión HTTP asíncrona reusable."""
         if self._session is None:
-            self._session = requests.Session()
-            adapter = requests.adapters.HTTPAdapter(pool_connections=10, pool_maxsize=10, max_retries=0)
-            self._session.mount('http://', adapter)
-            self._session.mount('https://', adapter)
+            self._session = httpx.AsyncClient(
+                timeout=httpx.Timeout(self.timeout, connect=10),
+                limits=httpx.Limits(max_connections=10, max_keepalive_connections=5)
+            )
         return self._session
 
     async def chat(self, messages, temperature=0.7):
-        return await asyncio.to_thread(self._chat_sync, messages, temperature)
-
-    def _chat_sync(self, messages, temperature):
+        """Envía un mensaje al LLM y retorna la respuesta (async native)."""
         url = f"{self.base_url}/chat/completions"
         payload = {
             "model": self.model,
@@ -105,8 +98,8 @@ class Brain:
         for attempt in range(self.max_retries):
             try:
                 start_time = time.time()
-                session = self._get_session()
-                response = session.post(url, json=payload, timeout=self.timeout)
+                session = await self.get_session()
+                response = await session.post(url, json=payload)
                 response.raise_for_status()
                 end_time = time.time()
                 
@@ -138,50 +131,36 @@ class Brain:
                 return content, usage
             except Exception as e:
                 if attempt < self.max_retries - 1:
-                    time.sleep(2 * (2 ** attempt))
+                    await asyncio.sleep(2 * (2 ** attempt))
                 else:
                     raise BrainConnectionError(f"Failed to connect to LLM server after {self.max_retries} attempts: {e}")
 
     async def get_context_info(self):
         """Retorna información detallada sobre el contexto del modelo (v0.4 CORREGIDO)."""
         try:
-            res = await asyncio.to_thread(requests.get, f"{self.base_url}/models", timeout=5)
+            session = await self.get_session()
+            res = await session.get(f"{self.base_url}/models", timeout=5)
             data = res.json()
             if 'data' in data and len(data['data']) > 0:
                 model_data = data['data'][0]
-                # Algunos servidores como LM Studio o LocalAI reportan context_length
                 self.context_max = model_data.get('context_length', self.context_max)
                 self.model = model_data.get('id', self.model)
-        except requests.RequestException as e:
+        except Exception as e:
             app_logger.warning(f"[Brain] Error fetching model info: {e}")
-        except json.JSONDecodeError as e:
-            app_logger.warning(f"[Brain] Invalid JSON from API: {e}")
-
-        # v0.4 CORREGIDO: NUNCA negativo
-        usable = self.context_max - self.reserved_system - self.reserved_completion
-        usable = max(usable, 0)
-        
-        threshold = int(usable * self.usable_threshold)
-        threshold = max(threshold, int(usable * 0.5))  # Mínimo 50%
         
         return {
             "max": self.context_max,
-            "usable": self.usable,
-            "threshold": self.threshold,
-            "reserved_system": self.reserved_system,
-            "reserved_completion": self.reserved_completion
+            "model": self.model
         }
-
-
+    
+    
     async def check_connection(self):
         """Verifica conexión con el servidor (v0.6 Compatibility)."""
-        return await asyncio.to_thread(self._check_connection_sync)
-
-    def _check_connection_sync(self):
         try:
-            res = requests.get(f"{self.base_url}/models", timeout=5)
+            session = await self.get_session()
+            res = await session.get(f"{self.base_url}/models", timeout=5)
             return res.status_code == 200
-        except requests.RequestException as e:
+        except Exception as e:
             app_logger.warning(f"[Brain] Connection check failed: {e}")
             return False
     
@@ -229,28 +208,6 @@ class Brain:
         """Estimación rápida - divide por 4."""
         return len(text) // 4
 
-    # ==================== v0.4: Context-Aware Calculations ====================
-    
-    def calc_usable_context(self, context_length: int) -> int:
-        """Calcula contexto usable SIN overflow (v0.4 CORREGIDO)."""
-        if context_length < 8192:
-            reserved_system = 500
-            reserved_completion = 1000
-        elif context_length < 32768:
-            reserved_system = 1500
-            reserved_completion = 3000
-        else:
-            reserved_system = 2000
-            reserved_completion = 4000
-        
-        usable = context_length - reserved_system - reserved_completion
-        return max(usable, 0)  # NUNCA negativo
-
-    def calc_threshold(self, usable: int) -> int:
-        """Threshold que NUNCA es negativo (v0.4)."""
-        threshold = int(usable * 0.7)
-        return max(threshold, int(usable * 0.5))  # Mínimo 50%
-
     # ==================== v0.4: U-Shape ====================
     
     def ushape_order(self, chunks: list) -> list:
@@ -285,7 +242,8 @@ class Brain:
         Combina API + fallback + cache.
         """
         try:
-            res = await asyncio.to_thread(requests.get, f"{self.base_url}/models", timeout=5)
+            session = await self.get_session()
+            res = await session.get(f"{self.base_url}/models", timeout=5)
             data = res.json()
             
             if 'data' in data and len(data['data']) > 0:
@@ -315,23 +273,8 @@ class Brain:
         return {"changed": False}
     
     def _update_threshold(self):
-        """Recalcula threshold después de cambio de contexto."""
-        if self.context_max < 8192:
-            self.reserved_system = 500
-            self.reserved_completion = 1000
-        elif self.context_max < 32768:
-            self.reserved_system = 1500
-            self.reserved_completion = 3000
-        else:
-            self.reserved_system = 2000
-            self.reserved_completion = 4000
-        
-        usable = self.context_max - self.reserved_system - self.reserved_completion
-        usable = max(usable, 0)
-        
-        self.usable = usable
-        self.threshold = int(usable * 0.85)
-        self.threshold = max(self.threshold, int(usable * 0.5))
+        """Stub for backward compatibility if needed, but logic is now in ContextManager."""
+        pass
 
     # ==================== v1.0: Active Coordination ====================
     

@@ -8,7 +8,7 @@ Requiere en config.json:
 - openaicompatible_api_key: "gsk_..."
 """
 
-import requests
+import httpx
 import os
 import logging
 import asyncio
@@ -36,9 +36,6 @@ class OpenAICompatibleProvider(BaseProvider):
     
     async def chat(self, messages: List[Dict], temperature: float = 0.7) -> Tuple[str, Dict[str, Any]]:
         """Envía un chat al endpoint compatible."""
-        return await asyncio.to_thread(self._chat_sync, messages, temperature)
-
-    def _chat_sync(self, messages: List[Dict], temperature: float = 0.7) -> Tuple[str, Dict[str, Any]]:
         start_time = time.time()
         url = f"{self.base_url}/chat/completions"
         
@@ -58,8 +55,8 @@ class OpenAICompatibleProvider(BaseProvider):
         last_error = None
         for attempt in range(self.max_retries):
             try:
-                session = self.get_session()
-                response = session.post(
+                session = await self.get_session()
+                response = await session.post(
                     url, 
                     json=payload, 
                     headers=headers,
@@ -83,26 +80,23 @@ class OpenAICompatibleProvider(BaseProvider):
                 logger.info(f"[OpenAICompatible] OK | Prompt: {usage['prompt_tokens']} | Completion: {usage['completion_tokens']} | Time: {duration:.2f}s")
                 return content, usage
                 
-            except requests.exceptions.RequestException as e:
+            except httpx.HTTPError as e:
                 last_error = e
                 if attempt < self.max_retries - 1:
-                    time.sleep(2 * (2 ** attempt))
+                    await asyncio.sleep(2 * (2 ** attempt))
         
         raise ConnectionError(f"OpenAICompatible no disponible: {last_error}")
     
     async def list_models(self) -> List[Dict[str, Any]]:
         """Lista modelos disponibles en el endpoint."""
-        return await asyncio.to_thread(self._list_models_sync)
-
-    def _list_models_sync(self) -> List[Dict[str, Any]]:
         try:
             url = f"{self.base_url}/models"
             headers = {}
             if self.api_key:
                 headers["Authorization"] = f"Bearer {self.api_key}"
             
-            session = self.get_session()
-            response = session.get(url, headers=headers, timeout=10)
+            session = await self.get_session()
+            response = await session.get(url, headers=headers, timeout=10)
             response.raise_for_status()
             
             data = response.json()
@@ -120,22 +114,19 @@ class OpenAICompatibleProvider(BaseProvider):
     
     async def sync_model_context(self):
         pass
-
+    
     async def get_context_info(self) -> Dict[str, Any]:
         return {"max": self.context_max, "usable": self.usable}
-
+    
     async def check_connection(self) -> bool:
         """Verifica conexión con el endpoint."""
-        return await asyncio.to_thread(self._check_connection_sync)
-
-    def _check_connection_sync(self) -> bool:
         try:
             url = f"{self.base_url}/models"
             headers = {}
             if self.api_key:
                 headers["Authorization"] = f"Bearer {self.api_key}"
-            session = self.get_session()
-            response = session.get(url, headers=headers, timeout=5)
+            session = await self.get_session()
+            response = await session.get(url, headers=headers, timeout=5)
             return response.status_code == 200
         except:
             return False

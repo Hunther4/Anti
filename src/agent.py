@@ -42,19 +42,37 @@ class AntiAgent:
         self.config = self._load_config()
 
         # Inicializar proveedor (auto-detectar o específico)
-        from src.providers import create_provider, auto_create
+        from src.providers import create_provider
         
         provider_type = self.config.get("provider", "auto")
         if provider_type == "auto":
-            # Auto-detectar proveedor
+            # Intentar detectar proveedor manualmente (sync path para __init__)
             try:
-                self.brain = auto_create(
-                    model=self.config.get("model"),
-                    timeout=self.config.get("timeout", 120)
-                )
-                logger.info(f"Proveedor auto-detectado: {type(self.brain).__name__}")
+                import httpx
+                detected_url = None
+                with httpx.Client(timeout=2) as client:
+                    for port in [1234, 11434, 8000, 8001]:
+                        try:
+                            endpoint = "/api/tags" if port == 11434 else "/v1/models"
+                            url = f"http://127.0.0.1:{port}"
+                            r = client.get(f"{url}{endpoint}")
+                            if r.status_code == 200:
+                                detected_url = url if port == 11434 else f"{url}/v1"
+                                break
+                        except Exception:
+                            continue
+                
+                if detected_url:
+                    if ":11434" in detected_url:
+                        self.brain = create_provider("ollama", base_url=detected_url,
+                            model=self.config.get("model"), timeout=self.config.get("timeout", 120))
+                    else:
+                        self.brain = create_provider("lmstudio", base_url=detected_url,
+                            model=self.config.get("model"), timeout=self.config.get("timeout", 120))
+                    logger.info(f"Proveedor auto-detectado: {type(self.brain).__name__}")
+                else:
+                    raise Exception("No provider found")
             except Exception as e:
-                # Fallback a LM Studio
                 logger.warning(f"Auto-detección falló: {e}. Usando LM Studio por defecto.")
                 self.brain = create_provider(
                     "lmstudio",
@@ -114,9 +132,9 @@ class AntiAgent:
     async def close(self):
         """Gracefully closes all resources."""
         if hasattr(self, 'brain') and self.brain:
-            self.brain.close()
+            if hasattr(self.brain, 'close'):
+                await self.brain.close()
         if hasattr(self, 'scorer') and self.scorer:
-            # Scorer currently has no close() method, but added for consistency
             pass
         app_logger.info("AntiAgent resources closed successfully.")
 
@@ -214,7 +232,7 @@ class AntiAgent:
         print(" ██   ██ ████   ██    ██    ██")
         print(" ███████ ██ ██  ██    ██    ██")
         print(" ██   ██ ██  ██ ██    ██    ██")
-        print(f" ██   ██ ██   ████    ██    ██  v1.5 Cosmic {Colors.END}{Colors.WHITE}(DevOps & Security Auditor){Colors.END}")
+        print(f" ██   ██ ██   ████    ██    ██  v1.6 Quantum {Colors.END}{Colors.WHITE}(Async Native & Full Audit){Colors.END}")
         print(f"{Colors.CYAN}⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼{Colors.END}\n")
 
         # 2. Tarjetas de diagnóstico
@@ -465,12 +483,56 @@ class AntiAgent:
         # OMNISCIENT HIPPOCAMPUS: Retrieve all latent memory automatically
         omni_context = self.memory.retrieve_omni_context(user_text)
 
+        # ANTI-MEMORY-CORE: Cargar boot_payload.json generado por Go
+        boot_payload = {}
+        boot_path = os.path.join(self.base_dir, "memory", "boot_payload.json")
+        if os.path.exists(boot_path):
+            try:
+                with open(boot_path, "r", encoding="utf-8") as f:
+                    boot_payload = json.load(f)
+            except Exception as e:
+                print(f"[MemoryCore] Error cargando boot_payload.json: {e}")
+        
+        dynamic_system_directives = ""
+        core_prompt = boot_payload.get("core_prompt")
+        id_proyecto = boot_payload.get("id_proyecto", "Anti_Core")
+        if core_prompt:
+            dynamic_system_directives += f"\n\n[CORE PROJECT DIRECTIVES: {id_proyecto}]\n{core_prompt}"
+        
+        engrams = boot_payload.get("engrams_imported")
+        if engrams:
+            dynamic_system_directives += "\n\n[EVOLUTIONARY MEMORY - DISTILLED ENGRAMS]"
+            for eng in engrams:
+                dynamic_system_directives += f"\n\n{eng}"
+
+        # Combine with omni_context
+        if dynamic_system_directives:
+            omni_context = dynamic_system_directives + "\n\n[OMNI_CONTEXT_ARCHIVE]\n" + omni_context
+
         system_prompt = build_system_prompt(
             name=name,
             personality=personality,
             omni_context=omni_context,
             dynamic_tools=self.plugin_manager.get_tool_descriptions()
         )
+
+        # 5. DYNAMIC SKILL TRIGGER SYSTEM (MIDDLEWARE)
+        skills = boot_payload.get("skills")
+        if skills:
+            active_overrides = []
+            for skill in skills:
+                kw = skill.get("trigger_keyword")
+                if kw:
+                    # Match trigger_keyword in user input (case-insensitive)
+                    if re.search(rf"\b{re.escape(kw)}\b", user_text, re.IGNORECASE):
+                        active_overrides.append(
+                            f"[SYSTEM OVERRIDE: SKILL ACTIVE]\n"
+                            f"Skill: {skill.get('nombre_skill', kw)}\n"
+                            f"{skill.get('instrucciones_markdown', '')}\n"
+                            f"[/SYSTEM OVERRIDE]"
+                        )
+            if active_overrides:
+                system_prompt += "\n\n" + "\n\n".join(active_overrides)
 
         # If locked to a document, inject a hard override into the system prompt
         if locked_to_doc and reading_context:
@@ -500,7 +562,9 @@ class AntiAgent:
             current_step = {"step": tool_step + 1, "tool": None, "query": None, "result_summary": None}
 
             # Detect which tool the model wants to use (via brain.process_response)
-            is_tool, tool_name, tool_args, clean_response = self.brain.process_response(response)
+            is_tool, valid_calls, clean_response = self.brain.process_response(response)
+            tool_name = valid_calls[0][0] if valid_calls else None
+            tool_args = valid_calls[0][1] if valid_calls else None
             if is_tool and tool_name in self.plugin_manager.tools:
                 raw_args = json.dumps(tool_args) if isinstance(tool_args, dict) else str(tool_args)
                 print(f"{Colors.YELLOW}[*] [{tool_step+1}/{MAX_TOOL_STEPS}] {tool_name}: {raw_args[:50]}...{Colors.END}")
@@ -627,13 +691,13 @@ class AntiAgent:
             # Pausa y health check
             await asyncio.sleep(1)
             try:
-                import requests
-                # Try to hit the health endpoint of the local server
-                health_res = requests.get("http://127.0.0.1:8000/health", timeout=2)
-                if health_res.status_code == 200:
-                    return "✅ Sistema renovado. El dashboard y el servidor ahora corren con la última versión."
-                else:
-                    return f"⚠️ Servidor iniciado pero salud no confirmada (Status: {health_res.status_code})."
+                import httpx
+                async with httpx.AsyncClient() as client:
+                    health_res = await client.get("http://127.0.0.1:8000/health", timeout=2)
+                    if health_res.status_code == 200:
+                        return "✅ Sistema renovado. El dashboard y el servidor ahora corren con la última versión."
+                    else:
+                        return f"⚠️ Servidor iniciado pero salud no confirmada (Status: {health_res.status_code})."
             except Exception as e:
                 return f"⚠️ Servidor iniciado pero no se pudo contactar el endpoint de salud: {e}"
                 

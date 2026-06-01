@@ -6,10 +6,11 @@ Requiere API key: export OPENAI_API_KEY=sk-...
 API: https://api.openai.com/v1/chat/completions
 """
 
-import requests
+import httpx
 import asyncio
 import os
 import logging
+import time
 from typing import List, Dict, Tuple, Any
 
 from .base import BaseProvider
@@ -36,11 +37,6 @@ class OpenAIProvider(BaseProvider):
     
     async def chat(self, messages: List[Dict], temperature: float = 0.7) -> Tuple[str, Dict[str, Any]]:
         """Envía un chat a OpenAI."""
-        return await asyncio.to_thread(self._chat_sync, messages, temperature)
-
-    def _chat_sync(self, messages: List[Dict], temperature: float = 0.7) -> Tuple[str, Dict[str, Any]]:
-        import time
-        
         if not self.api_key:
             raise ValueError("OPENAI_API_KEY no configurada")
         
@@ -63,8 +59,8 @@ class OpenAIProvider(BaseProvider):
         
         for attempt in range(self.max_retries):
             try:
-                session = self.get_session()
-                response = session.post(
+                session = await self.get_session()
+                response = await session.post(
                     url, 
                     json=payload, 
                     headers=headers,
@@ -89,19 +85,15 @@ class OpenAIProvider(BaseProvider):
                 
                 return content, usage
                 
-            except requests.exceptions.RequestException as e:
+            except httpx.HTTPError as e:
                 last_error = e
                 if attempt < self.max_retries - 1:
-                    import time as t
-                    t.sleep(2 * (2 ** attempt))
+                    await asyncio.sleep(2 * (2 ** attempt))
         
         raise ConnectionError(f"OpenAI no disponible: {last_error}")
     
     async def list_models(self) -> List[Dict[str, Any]]:
         """Lista modelos disponibles en OpenAI."""
-        return await asyncio.to_thread(self._list_models_sync)
-
-    def _list_models_sync(self) -> List[Dict[str, Any]]:
         if not self.api_key:
             return []
         
@@ -109,8 +101,8 @@ class OpenAIProvider(BaseProvider):
             url = f"{self.base_url}/models"
             headers = {"Authorization": f"Bearer {self.api_key}"}
             
-            session = self.get_session()
-            response = session.get(url, headers=headers, timeout=10)
+            session = await self.get_session()
+            response = await session.get(url, headers=headers, timeout=10)
             response.raise_for_status()
             
             data = response.json()
@@ -139,7 +131,7 @@ class OpenAIProvider(BaseProvider):
     async def sync_model_context(self):
         """Sincroniza modelo y contexto."""
         pass
-
+    
     async def get_context_info(self) -> Dict[str, Any]:
         """Retorna info del contexto."""
         return {
@@ -147,19 +139,16 @@ class OpenAIProvider(BaseProvider):
             "usable": self.usable,
             "threshold": self.threshold
         }
-
+    
     async def check_connection(self) -> bool:
         """Verifica conexión con OpenAI."""
-        return await asyncio.to_thread(self._check_connection_sync)
-
-    def _check_connection_sync(self) -> bool:
         if not self.api_key:
             return False
         
         try:
             headers = {"Authorization": f"Bearer {self.api_key}"}
-            session = self.get_session()
-            response = session.get(
+            session = await self.get_session()
+            response = await session.get(
                 f"{self.base_url}/models",
                 headers=headers,
                 timeout=5

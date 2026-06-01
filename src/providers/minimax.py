@@ -4,7 +4,7 @@ Minimax Provider - Adapter para Minimax API (api.minimax.chat)
 Requiere API key: export MINIMAX_API_KEY=mm-...
 """
 
-import requests
+import httpx
 import os
 import logging
 import asyncio
@@ -35,9 +35,6 @@ class MinimaxProvider(BaseProvider):
     
     async def chat(self, messages: List[Dict], temperature: float = 0.7) -> Tuple[str, Dict[str, Any]]:
         """Envía un chat a Minimax."""
-        return await asyncio.to_thread(self._chat_sync, messages, temperature)
-
-    def _chat_sync(self, messages: List[Dict], temperature: float = 0.7) -> Tuple[str, Dict[str, Any]]:
         if not self.api_key:
             raise ValueError("MINIMAX_API_KEY no configurada")
             
@@ -59,8 +56,8 @@ class MinimaxProvider(BaseProvider):
         last_error = None
         for attempt in range(self.max_retries):
             try:
-                session = self.get_session()
-                response = session.post(
+                session = await self.get_session()
+                response = await session.post(
                     url, 
                     json=payload, 
                     headers=headers,
@@ -84,10 +81,10 @@ class MinimaxProvider(BaseProvider):
                 logger.info(f"[Minimax] OK | Prompt: {usage['prompt_tokens']} | Completion: {usage['completion_tokens']} | Time: {duration:.2f}s")
                 return content, usage
                 
-            except requests.exceptions.RequestException as e:
+            except httpx.HTTPError as e:
                 last_error = e
                 if attempt < self.max_retries - 1:
-                    time.sleep(2 * (2 ** attempt))
+                    await asyncio.sleep(2 * (2 ** attempt))
         
         raise ConnectionError(f"Minimax no disponible: {last_error}")
     
@@ -101,15 +98,12 @@ class MinimaxProvider(BaseProvider):
     
     async def sync_model_context(self):
         pass
-
+    
     async def get_context_info(self) -> Dict[str, Any]:
         return {"max": 128000, "usable": 120000}
-
+    
     async def check_connection(self) -> bool:
         """Verifica la API key haciendo una llamada mínima."""
-        return await asyncio.to_thread(self._check_connection_sync)
-
-    def _check_connection_sync(self) -> bool:
         if not self.api_key:
             return False
         try:
@@ -123,8 +117,8 @@ class MinimaxProvider(BaseProvider):
                 "messages": [{"role": "user", "content": "ping"}],
                 "max_tokens": 5
             }
-            session = self.get_session()
-            response = session.post(url, json=payload, headers=headers, timeout=5)
+            session = await self.get_session()
+            response = await session.post(url, json=payload, headers=headers, timeout=5)
             return response.status_code == 200
         except:
             return False
