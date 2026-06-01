@@ -228,12 +228,13 @@ class AntiAgent:
     def _display_banner(self, is_local: bool):
         """Renderiza el banner ASCII y las tarjetas de diagnóstico de inicio."""
         # 1. ASCII Banner
-        print(f"\n{Colors.CYAN}{Colors.BOLD}  █████  ███    ██ ████████ ██")
-        print(" ██   ██ ████   ██    ██    ██")
-        print(" ███████ ██ ██  ██    ██    ██")
-        print(" ██   ██ ██  ██ ██    ██    ██")
-        print(f" ██   ██ ██   ████    ██    ██  v1.6 Quantum {Colors.END}{Colors.WHITE}(Async Native & Full Audit){Colors.END}")
-        print(f"{Colors.CYAN}⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼{Colors.END}\n")
+        print(f"\n{Colors.CYAN}{Colors.BOLD}")
+        print("     _   ___  __  __  ___  ")
+        print("    /_\\ / _ \\|  \\/  |/ _ \\ ")
+        print("   / _ \\ (_) | |\\/| | (_) |")
+        print("  /_/ \\_\\___/|_|  |_|___/ ")
+        print(f"{Colors.END}{Colors.WHITE}  v1.6 Quantum{Colors.END}")
+        print(f"{Colors.CYAN}{'─' * 40}{Colors.END}\n")
 
         # 2. Tarjetas de diagnóstico
         provider_label = self.config.get("provider", "auto").upper()
@@ -262,7 +263,7 @@ class AntiAgent:
             print(f"  {Colors.BOLD}🔒 [CONTEXTO]:{Colors.END}   Local ({Colors.GREEN}Ventana 10 msg - Ultra Velocidad ⚡{Colors.END})")
         else:
             print(f"  {Colors.BOLD}☁️ [CONTEXTO]:{Colors.END}   Nube ({Colors.BLUE}Ventana 100 msg - Memoria Profunda ☁️{Colors.END})")
-        print(f"\n{Colors.CYAN}⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼⎼{Colors.END}\n")
+        print(f"\n{Colors.CYAN}{'─' * 40}{Colors.END}\n")
 
     def _check_startup_connection(self):
         """Verifica la conexión con el proveedor al arrancar y avisa si falla."""
